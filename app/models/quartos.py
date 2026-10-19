@@ -1,4 +1,4 @@
-# Super Classe Quartos como referência para armazenamento no banco de dados.
+# ============================================ Super Classe Quartos ============================================
 
 class Quarto():
 

@@ -1,0 +1,4 @@
+# Definição das dependências do sistema.
+
+pytest
+sqlite3 já vem instalado na biblioteca padrão do python

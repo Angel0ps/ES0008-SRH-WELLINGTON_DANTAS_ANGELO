@@ -1,4 +1,5 @@
 from datetime import date
+from .quartos import Quarto
 
 # ==================================================== Super Classe Registro ====================================================
 class Registro: # Concentra os dados comuns a todos os registros. Como id, origem, data e etc.
@@ -138,8 +139,9 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
         data_entrada: date,
         data_saida: date,
         qtd_hospedes: int,
-        adicionais: float = 0.0,
-        pagamentos: list | None = None
+        adicionais: list | None = None,
+        pagamentos: list | None = None,
+        hospede_id: str | None = None,
     ):
         super().__init__( # Chama o construtor da classe pai Registro
             id,
@@ -152,7 +154,8 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
         self.data_entrada = data_entrada
         self.data_saida = data_saida
         self.qtd_hospedes = qtd_hospedes
-        self.adicionais = adicionais
+        self.hospede_id = hospede_id
+        self.adicionais = adicionais if adicionais is not None else []
         self.pagamentos = pagamentos if pagamentos is not None else []
 
     # ========== data entrada ==========
@@ -191,6 +194,26 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
 
         self.__data_saida = valor
 
+    # ========== Hospede relacionado =============
+
+    # ========== hóspede relacionado ==========
+
+    @property
+    def hospede_id(self):
+        return self.__hospede_id
+
+    @hospede_id.setter
+    def hospede_id(self, valor: str | None):
+        if valor is None:
+            self.__hospede_id = None
+            return
+
+        if not str(valor).strip():
+            raise ValueError("ID do hóspede não pode ser vazio")
+
+        self.__hospede_id = str(valor).strip()
+
+
     # ========== quantidade de hóspedes ==========
 
     @property
@@ -218,20 +241,17 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
         return self.__adicionais
 
     @adicionais.setter
-    def adicionais(self, valor: float) -> None:
-        try:
-            valor = float(valor)
-        except (TypeError, ValueError):
-            raise ValueError(
-                "Adicionais deve ser um valor numérico"
-            )
+    def adicionais(self, valor: list):
+        if not isinstance(valor, list):
+            raise ValueError("Adicionais deve ser uma lista")
 
-        if valor < 0:
+        if not all(isinstance(item, Adicional) for item in valor):
             raise ValueError(
-                "Adicionais não pode ser negativo"
+                "Todos os adicionais devem ser objetos Adicional"
             )
 
         self.__adicionais = valor
+
 
     # ========== pagamentos ==========
 
@@ -242,8 +262,11 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
     @pagamentos.setter
     def pagamentos(self, valor: list):
         if not isinstance(valor, list):
+            raise ValueError("Pagamentos deve ser uma lista")
+
+        if not all(isinstance(item, Pagamento) for item in valor):
             raise ValueError(
-                "Pagamentos deve ser uma lista"
+                "Todos os pagamentos devem ser objetos Pagamento"
             )
 
         self.__pagamentos = valor
@@ -267,18 +290,22 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
         return f"Check-out da reserva {self.id} realizado."
 
     def total_pago(self) -> float:
-        total = 0.0
+        return sum(
+            pagamento.valor
+            for pagamento in self.pagamentos
+        )
 
-        for pagamento in self.pagamentos:
-            if hasattr(pagamento, "valor"):
-                total += pagamento.valor
-
-        return total
+    def total_adicionais(self) -> float:
+        return sum(
+            adicional.valor
+            for adicional in self.adicionais
+        )
 
     def total_devido(self, valor_reserva: float) -> float:
-        total = valor_reserva + self.adicionais
+        total = valor_reserva + self.total_adicionais()
 
         return max(0.0, total - self.total_pago())
+
 
     # ========== método especial ==========
 
@@ -286,16 +313,131 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
         return (self.data_saida - self.data_entrada).days
 
 # ============================================================== composições e subclasses =================================================================
-class Pagamento():
+  
+class Pagamento:
 
     # Pagamento realizado para uma reserva.
-    
-    pass
-class Adicional():
-    
-    # Item ou serviço extra cobrado em uma reserva (ex: consumo de um frigobar, etc).
 
-    pass 
+    def __init__(
+        self,
+        id: str,
+        valor: float,
+        data: date,
+        metodo: str
+    ):
+        self.id = id
+        self.valor = valor
+        self.data = data
+        self.metodo = metodo
+
+    @property
+    def id(self):
+        return self.__id
+
+    @id.setter
+    def id(self, valor: str):
+        if not valor or not str(valor).strip():
+            raise ValueError("ID do pagamento não pode ser vazio")
+        self.__id = str(valor).strip()
+
+    @property
+    def valor(self):
+        return self.__valor
+
+    @valor.setter
+    def valor(self, valor: float):
+        try:
+            valor = float(valor)
+        except (TypeError, ValueError):
+            raise ValueError("Valor do pagamento deve ser numérico")
+
+        if valor <= 0:
+            raise ValueError("Valor do pagamento deve ser positivo")
+
+        self.__valor = valor
+
+    @property
+    def data(self):
+        return self.__data
+
+    @data.setter
+    def data(self, valor: date):
+        if not isinstance(valor, date):
+            raise ValueError("Data do pagamento deve ser do tipo date")
+        self.__data = valor
+
+    @property
+    def metodo(self):
+        return self.__metodo
+
+    @metodo.setter
+    def metodo(self, valor: str):
+        if not valor or not str(valor).strip():
+            raise ValueError("Método de pagamento não pode ser vazio")
+        self.__metodo = str(valor).strip()
+
+
+class Adicional:
+
+    # Item ou serviço extra cobrado em uma reserva.
+
+    def __init__(
+        self,
+        id: str,
+        descricao: str,
+        valor: float,
+        data: date
+    ):
+        self.id = id
+        self.descricao = descricao
+        self.valor = valor
+        self.data = data
+
+    @property
+    def id(self):
+        return self.__id
+
+    @id.setter
+    def id(self, valor: str):
+        if not valor or not str(valor).strip():
+            raise ValueError("ID do adicional não pode ser vazio")
+        self.__id = str(valor).strip()
+
+    @property
+    def descricao(self):
+        return self.__descricao
+
+    @descricao.setter
+    def descricao(self, valor: str):
+        if not valor or not str(valor).strip():
+            raise ValueError("Descrição do adicional não pode ser vazia")
+        self.__descricao = str(valor).strip()
+
+    @property
+    def valor(self):
+        return self.__valor
+
+    @valor.setter
+    def valor(self, valor: float):
+        try:
+            valor = float(valor)
+        except (TypeError, ValueError):
+            raise ValueError("Valor do adicional deve ser numérico")
+
+        if valor < 0:
+            raise ValueError("Valor do adicional não pode ser negativo")
+
+        self.__valor = valor
+
+    @property
+    def data(self):
+        return self.__data
+
+    @data.setter
+    def data(self, valor: date):
+        if not isinstance(valor, date):
+            raise ValueError("Data do adicional deve ser do tipo date")
+        self.__data = valor
 class Bloqueio():
 
     # Indisponibilização temporária de um quarto.

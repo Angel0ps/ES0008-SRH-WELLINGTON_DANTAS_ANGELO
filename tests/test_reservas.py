@@ -3,6 +3,7 @@ import pytest
 
 from datetime import date
 from pathlib import Path
+from app.models.registros import Registro, Reserva, Pagamento, Adicional
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -41,7 +42,7 @@ def test_criar_reserva_valida():
     assert r.id == "res1"
     assert r.quarto_relacionado == "101"
     assert r.qtd_hospedes == 2
-    assert r.adicionais == 0.0
+    assert r.adicionais == []
     assert r.pagamentos == []
  
  
@@ -65,9 +66,14 @@ def test_qtd_hospedes_tipo_invalido_levanta_erro():
         _reserva(qtd_hospedes="dois")
  
  
-def test_adicionais_negativo_levanta_erro():
+def test_adicional_negativo_levanta_erro():
     with pytest.raises(ValueError):
-        _reserva(adicionais=-10)
+        Adicional(
+            id="a1",
+            descricao="Serviço extra",
+            valor=-10.0,
+            data=date(2026, 10, 10)
+        )
  
  
 def test_pagamentos_tipo_invalido_levanta_erro():
@@ -108,18 +114,28 @@ def test_total_pago_sem_pagamentos():
  
  
 def test_total_devido_sem_pagamentos():
-    r = _reserva(adicionais=50.0)
+    adicional = Adicional(
+        id="a1",
+        descricao="Serviço extra",
+        valor=50.0,
+        data=date(2026, 10, 10)
+    )
+
+    r = _reserva(adicionais=[adicional])
+
     assert r.total_devido(valor_reserva=500.0) == 550.0
  
  
 def test_total_devido_nunca_fica_negativo():
-    r = _reserva()
- 
-    class PagamentoFake:
-        def __init__(self, valor):
-            self.valor = valor
- 
-    r.pagamentos = [PagamentoFake(1000.0)]
+    pagamento = Pagamento(
+        id="p1",
+        valor=1000.0,
+        data=date(2026, 10, 10),
+        metodo="Cartão"
+    )
+
+    r = _reserva(pagamentos=[pagamento])
+
     assert r.total_devido(valor_reserva=100.0) == 0.0
  
  
