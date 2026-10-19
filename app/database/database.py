@@ -42,39 +42,32 @@ def criar_tabelas():
                 qtd_hospedes INTEGER NOT NULL,
                 status TEXT NOT NULL,
 
-                FOREIGN KEY (hospede_id)
-                    REFERENCES hospedes(id),
-
-                FOREIGN KEY (quarto_numero)
-                    REFERENCES quartos(numero),
+                FOREIGN KEY (hospede_id) REFERENCES hospedes(id),
+                FOREIGN KEY (quarto_numero) REFERENCES quartos(numero),
 
                 CHECK (data_saida > data_entrada),
                 CHECK (qtd_hospedes > 0)
             );
 
             CREATE TABLE IF NOT EXISTS pagamentos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT PRIMARY KEY,
                 reserva_id TEXT NOT NULL,
                 valor REAL NOT NULL,
                 data_pagamento TEXT NOT NULL,
                 metodo TEXT NOT NULL,
 
-                FOREIGN KEY (reserva_id)
-                    REFERENCES reservas(id),
-
+                FOREIGN KEY (reserva_id) REFERENCES reservas(id),
                 CHECK (valor > 0)
             );
 
             CREATE TABLE IF NOT EXISTS adicionais (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT PRIMARY KEY,
                 reserva_id TEXT NOT NULL,
                 descricao TEXT NOT NULL,
                 valor REAL NOT NULL,
                 data_lancamento TEXT NOT NULL,
 
-                FOREIGN KEY (reserva_id)
-                    REFERENCES reservas(id),
-
+                FOREIGN KEY (reserva_id) REFERENCES reservas(id),
                 CHECK (valor >= 0)
             );
         """)
@@ -83,3 +76,4 @@ def criar_tabelas():
 if __name__ == "__main__":
     criar_tabelas()
     print("Banco de dados inicializado.")
+

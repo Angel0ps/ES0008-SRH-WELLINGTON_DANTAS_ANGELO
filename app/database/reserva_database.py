@@ -1,4 +1,4 @@
-
+# ======================================= Operações no banco de dados relacionados a reserva ================================
 from app.database.database import conectar
 
 
