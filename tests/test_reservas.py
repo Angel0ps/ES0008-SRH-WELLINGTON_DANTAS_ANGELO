@@ -1,15 +1,14 @@
 import sys
-import pytest
-
 from datetime import date
 from pathlib import Path
-from app.models.registros import Registro, Reserva, Pagamento, Adicional
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.models.registros import Registro, Reserva
+from app.models.registros import Registro, Reserva, Pagamento, Adicional
 
 def _reserva(**overrides):
     base = dict(
