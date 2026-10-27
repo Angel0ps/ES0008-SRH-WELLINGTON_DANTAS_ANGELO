@@ -42,10 +42,27 @@ class ServicoReservas:
         hospedes_ids: list,
         qtd_hospedes: int
     ) -> Reserva:
+        # Valida datas e consistência dos hóspedes antes de consultar/persistir.
+        if not isinstance(data_entrada, date) or not isinstance(data_saida, date):
+            raise ValueError("As datas da reserva devem ser objetos date válidos")
+        if data_saida <= data_entrada:
+            raise ValueError("Data de saída deve ser posterior à data de entrada")
+        if not isinstance(qtd_hospedes, int) or isinstance(qtd_hospedes, bool) or qtd_hospedes <= 0:
+            raise ValueError("Quantidade de hóspedes deve ser um inteiro maior que zero")
+        if not isinstance(hospedes_ids, (list, tuple)) or not hospedes_ids:
+            raise ValueError("Informe os hóspedes vinculados à reserva")
+        if len(set(hospedes_ids)) != len(hospedes_ids):
+            raise ValueError("Não é permitido repetir hóspedes na reserva")
+
         quarto = self.repositorio.obter_quarto(numero_quarto)
 
         if quarto is None:
             raise ValueError(f"Quarto {numero_quarto!r} não cadastrado")
+
+        if _norm(quarto.status) == "ocupado":
+            raise ValueError(
+                f"Quarto {quarto.numero} está ocupado e não aceita novas reservas"
+            )
 
         if _norm(quarto.status) in STATUS_QUARTO_BLOQUEANTE:
             raise ValueError(
@@ -56,6 +73,11 @@ class ServicoReservas:
             raise ValueError(
                 f"Capacidade excedida: quarto {quarto.numero} comporta {quarto.capacidade} hóspede(s), "
                 f"mas foram pedidas {qtd_hospedes} vaga(s)"
+            )
+
+        if len(hospedes_ids) != qtd_hospedes:
+            raise ValueError(
+                "A quantidade de hóspedes deve corresponder ao número de hóspedes vinculados"
             )
 
         for hid in hospedes_ids:

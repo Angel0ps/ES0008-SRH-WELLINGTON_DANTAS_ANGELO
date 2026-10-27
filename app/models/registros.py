@@ -1,5 +1,5 @@
 from datetime import date
-from .quartos import Quarto
+from app.models.quartos import Quarto
 
 # ==================================================== Super Classe Registro ====================================================
 class Registro: # Concentra os dados comuns a todos os registros. Como id, origem, data e etc.

@@ -67,6 +67,41 @@ def test_criar_reserva_hospede_inexistente(servico):
         _criar(servico, hospedes=("hx",))
 
 
+def test_data_saida_igual_entrada_e_rejeitada(servico):
+    with pytest.raises(ValueError, match="posterior"):
+        _criar(servico, entrada=date(2026, 12, 10), saida=date(2026, 12, 10))
+
+
+def test_data_saida_anterior_entrada_e_rejeitada(servico):
+    with pytest.raises(ValueError, match="posterior"):
+        _criar(servico, entrada=date(2026, 12, 11), saida=date(2026, 12, 10))
+
+
+def test_quantidade_hospedes_deve_corresponder_aos_vinculados(servico):
+    with pytest.raises(ValueError, match="corresponder"):
+        _criar(servico, hospedes=("h1",), qtd=2)
+
+
+def test_quarto_marcado_ocupado_nao_aceita_reserva(servico, repo):
+    quarto = repo.obter_quarto("101")
+    quarto.status = "ocupado"
+    repo.salvar_quarto(quarto)
+    with pytest.raises(ValueError, match="está ocupado"):
+        _criar(servico)
+
+
+def test_pagamento_negativo_e_rejeitado(servico):
+    _criar(servico)
+    with pytest.raises(ValueError, match="positivo"):
+        servico.lancar_pagamento("r1", id="p-neg", forma="pix", valor=-10)
+
+
+def test_adicional_negativo_e_rejeitado(servico):
+    _criar(servico)
+    with pytest.raises(ValueError, match="negativo"):
+        servico.lancar_adicional("r1", id="a-neg", descricao="Taxa", valor=-1)
+
+
 # ==================== conflito de datas ====================
 def test_conflito_de_datas_bloqueia(servico):
     _criar(servico, id="r1", entrada=date(2026, 12, 10), saida=date(2026, 12, 12))
