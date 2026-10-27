@@ -168,6 +168,25 @@ class Hospede(Pessoa):
         acess = " (acessibilidade)" if self.acessibilidade else ""
         return f"Hóspede: {self.nome} ({self.documento}){acess}"
 
-class Funcionario():
-    # Colaborador do hotel identificado por um cargo.
-    pass
+# ================================= Subclasse Funcionário ===============================
+
+class Funcionario(Pessoa):
+    """Colaborador do hotel identificado por um cargo."""
+
+    def __init__(self, id, nome, documento, email, telefone, cargo: str):
+        super().__init__(id, nome, documento, email, telefone)
+        self.cargo = cargo
+
+    # ========== cargo ==========
+    @property
+    def cargo(self) -> str:
+        return self.__cargo
+
+    @cargo.setter
+    def cargo(self, valor: str) -> None:
+        if not valor or not str(valor).strip():
+            raise ValueError("Cargo não pode ser vazio")
+        self.__cargo = str(valor).strip()
+
+    def __str__(self) -> str:
+        return f"Funcionário: {self.nome} ({self.cargo})"

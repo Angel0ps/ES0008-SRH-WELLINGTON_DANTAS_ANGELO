@@ -1,5 +1,5 @@
 from datetime import date
-from .quartos import Quarto
+from app.models.quartos import Quarto
 
 # ==================================================== Super Classe Registro ====================================================
 class Registro: # Concentra os dados comuns a todos os registros. Como id, origem, data e etc.
@@ -142,6 +142,7 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
         adicionais: list | None = None,
         pagamentos: list | None = None,
         hospede_id: str | None = None,
+        hospedes_ids: list | None = None,
     ):
         super().__init__( # Chama o construtor da classe pai Registro
             id,
@@ -154,7 +155,10 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
         self.data_entrada = data_entrada
         self.data_saida = data_saida
         self.qtd_hospedes = qtd_hospedes
-        self.hospede_id = hospede_id
+        self.hospedes_ids = (
+            list(hospedes_ids) if hospedes_ids is not None
+            else ([hospede_id] if hospede_id is not None else [])
+        )
         self.adicionais = adicionais if adicionais is not None else []
         self.pagamentos = pagamentos if pagamentos is not None else []
 
@@ -194,9 +198,25 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
 
         self.__data_saida = valor
 
-    # ========== Hospede relacionado =============
+    # ========== hóspedes relacionados ==========
 
-    # ========== hóspede relacionado ==========
+    @property
+    def hospedes_ids(self):
+        return self.__hospedes_ids
+
+    @hospedes_ids.setter
+    def hospedes_ids(self, valores: list):
+        if not isinstance(valores, list):
+            raise ValueError("IDs dos hóspedes devem estar em uma lista")
+        ids = []
+        for valor in valores:
+            if valor is None or not str(valor).strip():
+                raise ValueError("ID do hóspede não pode ser vazio")
+            ids.append(str(valor).strip())
+        if len(ids) != len(set(ids)):
+            raise ValueError("Não é permitido repetir hóspedes na reserva")
+        self.__hospedes_ids = ids
+        self.__hospede_id = ids[0] if ids else None
 
     @property
     def hospede_id(self):
@@ -206,13 +226,23 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
     def hospede_id(self, valor: str | None):
         if valor is None:
             self.__hospede_id = None
+            if hasattr(self, "_Reserva__hospedes_ids"):
+                self.__hospedes_ids = []
             return
-
         if not str(valor).strip():
             raise ValueError("ID do hóspede não pode ser vazio")
+        valor = str(valor).strip()
+        self.__hospede_id = valor
+        if hasattr(self, "_Reserva__hospedes_ids") and valor not in self.__hospedes_ids:
+            self.__hospedes_ids.insert(0, valor)
 
-        self.__hospede_id = str(valor).strip()
-
+    def vincular_hospede(self, hospede_id: str):
+        if not hospede_id or not str(hospede_id).strip():
+            raise ValueError("ID do hóspede não pode ser vazio")
+        hospede_id = str(hospede_id).strip()
+        if hospede_id in self.hospedes_ids:
+            raise ValueError("Hóspede já está vinculado à reserva")
+        self.hospedes_ids = self.hospedes_ids + [hospede_id]
 
     # ========== quantidade de hóspedes ==========
 
@@ -318,17 +348,28 @@ class Pagamento:
 
     # Pagamento realizado para uma reserva.
 
-    def __init__(
-        self,
-        id: str,
-        valor: float,
-        data: date,
-        metodo: str
-    ):
+    def __init__(self, *args, id=None, valor=None, data=None, metodo=None, reserva_id=None, forma=None):
+        # Aceita a assinatura do modelo (id, valor, data, metodo) e
+        # a assinatura histórica do serviço/testes (id, reserva_id, forma, valor[, data]).
+        if args:
+            if len(args) in (4, 5) and isinstance(args[1], str) and isinstance(args[2], str):
+                id, reserva_id, forma, valor = args[:4]
+                data = args[4] if len(args) == 5 else (data or date.today())
+                metodo = forma
+            elif len(args) >= 1:
+                nomes = ("id", "valor", "data", "metodo")
+                valores = dict(zip(nomes, args))
+                id = valores.get("id", id)
+                valor = valores.get("valor", valor)
+                data = valores.get("data", data)
+                metodo = valores.get("metodo", metodo)
+        if forma is not None:
+            metodo = forma
         self.id = id
         self.valor = valor
-        self.data = data
+        self.data = data or date.today()
         self.metodo = metodo
+        self.reserva_id = reserva_id
 
     @property
     def id(self):
@@ -374,24 +415,48 @@ class Pagamento:
     def metodo(self, valor: str):
         if not valor or not str(valor).strip():
             raise ValueError("Método de pagamento não pode ser vazio")
-        self.__metodo = str(valor).strip()
+        metodo = str(valor).strip()
+        normalizado = metodo.lower().replace("á", "a").replace("ã", "a").replace("é", "e")
+        formas_validas = {
+            "pix", "cartao", "cartao_credito", "cartao_debito",
+            "credito", "debito", "dinheiro", "transferencia", "ted", "doc",
+            "cartão", "cartão de crédito", "cartão de débito",
+        }
+        if normalizado not in formas_validas:
+            raise ValueError(f"Método de pagamento inválido: {metodo!r}")
+        self.__metodo = metodo
+
+    @property
+    def forma(self):
+        return self.metodo
+
+    @forma.setter
+    def forma(self, valor):
+        self.metodo = valor
 
 
 class Adicional:
 
     # Item ou serviço extra cobrado em uma reserva.
 
-    def __init__(
-        self,
-        id: str,
-        descricao: str,
-        valor: float,
-        data: date
-    ):
+    def __init__(self, *args, id=None, descricao=None, valor=None, data=None, reserva_id=None):
+        # Aceita (id, descricao, valor, data) e (id, reserva_id, descricao, valor).
+        if args:
+            if len(args) in (4, 5) and isinstance(args[1], str) and isinstance(args[2], str):
+                id, reserva_id, descricao, valor = args[:4]
+                data = args[4] if len(args) == 5 else (data or date.today())
+            else:
+                nomes = ("id", "descricao", "valor", "data")
+                valores = dict(zip(nomes, args))
+                id = valores.get("id", id)
+                descricao = valores.get("descricao", descricao)
+                valor = valores.get("valor", valor)
+                data = valores.get("data", data)
         self.id = id
         self.descricao = descricao
         self.valor = valor
-        self.data = data
+        self.data = data or date.today()
+        self.reserva_id = reserva_id
 
     @property
     def id(self):

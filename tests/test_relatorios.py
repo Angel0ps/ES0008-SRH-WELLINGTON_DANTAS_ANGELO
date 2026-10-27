@@ -1,202 +1,82 @@
-
-import sqlite3
 from datetime import date
 
 import pytest
 
-from app.services import relatorios
+from app.models.pessoas import Hospede
+from app.models.quartos import Simples, Duplo
+from app.database.repositorio import Repositorio
+from app.services.reservas import ServicoReservas
+from app.services.relatorios import RelatorioOcupacao
 
 
 @pytest.fixture
-def banco_teste(monkeypatch):
-    """Cria um banco temporário para testar o relatório."""
-
-    conexao = sqlite3.connect(":memory:")
-    conexao.row_factory = sqlite3.Row
-
-    conexao.executescript("""
-        CREATE TABLE quartos (
-            numero TEXT PRIMARY KEY,
-            capacidade INTEGER NOT NULL,
-            diaria REAL NOT NULL,
-            status TEXT NOT NULL
-        );
-
-        CREATE TABLE reservas (
-            id TEXT PRIMARY KEY,
-            hospede_id TEXT NOT NULL,
-            quarto_numero TEXT NOT NULL,
-            data_reserva TEXT NOT NULL,
-            data_entrada TEXT NOT NULL,
-            data_saida TEXT NOT NULL,
-            qtd_hospedes INTEGER NOT NULL,
-            status TEXT NOT NULL
-        );
-    """)
-
-    monkeypatch.setattr(
-        relatorios,
-        "conectar",
-        lambda: conexao
-    )
-
-    yield conexao
-    conexao.close()
+def repo():
+    r = Repositorio(":memory:")
+    r.salvar_quarto(Simples(numero="101", capacidade=2, diaria=100.0))
+    r.salvar_quarto(Duplo(numero="102", capacidade=3, diaria=180.0))
+    r.salvar_hospede(Hospede(
+        id="h1", nome="Ana Souza", documento="12345678901",
+        email="ana@mail.com", telefone="88999998888"))
+    return r
 
 
-def cadastrar_quartos(conexao, numeros):
-    """Insere quartos para os testes."""
-
-    conexao.executemany(
-        """
-        INSERT INTO quartos (numero, capacidade, diaria, status)
-        VALUES (?, ?, ?, ?)
-        """,
-        [
-            (numero, 2, 150.0, "disponivel")
-            for numero in numeros
-        ]
-    )
-    conexao.commit()
+def test_periodo_sem_reservas_taxa_zero(repo):
+    rel = RelatorioOcupacao(repo)
+    assert rel.taxa_ocupacao(date(2026, 12, 1), date(2026, 12, 8)) == 0.0
 
 
-def cadastrar_reserva(
-    conexao,
-    id_reserva,
-    quarto,
-    entrada,
-    saida,
-    status="Confirmada"
-):
-    """Insere uma reserva para os testes."""
-
-    conexao.execute(
-        """
-        INSERT INTO reservas (
-            id, hospede_id, quarto_numero, data_reserva,
-            data_entrada, data_saida, qtd_hospedes, status
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            id_reserva,
-            f"H{id_reserva}",
-            quarto,
-            "2026-10-01",
-            entrada,
-            saida,
-            1,
-            status
-        )
-    )
-    conexao.commit()
+def test_reserva_ocupa_apenas_noites_do_periodo(repo):
+    s = ServicoReservas(repo)
+    s.criar_reserva(id="r1", numero_quarto="101",
+                    data_entrada=date(2026, 12, 2), data_saida=date(2026, 12, 4),
+                    hospedes_ids=["h1"], qtd_hospedes=1)  # 2 noites
+    rel = RelatorioOcupacao(repo)
+    # 2 noites / (2 quartos x 7 dias) = 2/14
+    assert rel.taxa_ocupacao(date(2026, 12, 1), date(2026, 12, 8)) == pytest.approx(1 / 7)
 
 
-def test_relatorio_sem_quartos(banco_teste):
-    """Sem quartos cadastrados, a ocupação deve ser zero."""
-
-    resultado = relatorios.relatorio_ocupacao(
-        date(2026, 10, 19),
-        date(2026, 10, 19)
-    )
-
-    assert len(resultado) == 1
-    assert resultado[0]["quartos_ocupados"] == 0
-    assert resultado[0]["total_quartos"] == 0
-    assert resultado[0]["percentual_ocupacao"] == 0.0
+def test_periodo_parcial_conta_so_a_intersecao(repo):
+    s = ServicoReservas(repo)
+    s.criar_reserva(id="r1", numero_quarto="101",
+                    data_entrada=date(2026, 12, 6), data_saida=date(2026, 12, 8),
+                    hospedes_ids=["h1"], qtd_hospedes=1)
+    rel = RelatorioOcupacao(repo)
+    # a reserva tem 2 noites (6 e 7); o período tem 7 dias e 2 quartos: 2/14
+    assert rel.taxa_ocupacao(date(2026, 12, 6), date(2026, 12, 13)) == pytest.approx(1 / 7)
 
 
-def test_relatorio_sem_reservas(banco_teste):
-    """Quartos cadastrados sem reservas devem ter ocupação zero."""
-
-    cadastrar_quartos(banco_teste, ["101", "102", "103"])
-
-    resultado = relatorios.relatorio_ocupacao(
-        date(2026, 10, 19),
-        date(2026, 10, 19)
-    )
-
-    assert resultado[0]["quartos_ocupados"] == 0
-    assert resultado[0]["total_quartos"] == 3
-    assert resultado[0]["percentual_ocupacao"] == 0.0
+def test_reserva_cancelada_nao_conta_na_ocupacao(repo):
+    s = ServicoReservas(repo)
+    s.criar_reserva(id="r1", numero_quarto="101",
+                    data_entrada=date(2026, 12, 2), data_saida=date(2026, 12, 6),
+                    hospedes_ids=["h1"], qtd_hospedes=1)
+    s.cancelar("r1", hoje=date(2026, 12, 1))  # multa: 1 diária
+    rel = RelatorioOcupacao(repo)
+    assert rel.taxa_ocupacao(date(2026, 12, 1), date(2026, 12, 8)) == 0.0
 
 
-def test_calcula_ocupacao_por_dia(banco_teste):
-    """Conta quartos ocupados respeitando entrada e saída."""
-
-    cadastrar_quartos(banco_teste, ["101", "102", "103"])
-
-    cadastrar_reserva(
-        banco_teste, "R1", "101", "2026-10-19", "2026-10-21"
-    )
-    cadastrar_reserva(
-        banco_teste, "R2", "102", "2026-10-20", "2026-10-23"
-    )
-
-    resultado = relatorios.relatorio_ocupacao(
-        date(2026, 10, 19),
-        date(2026, 10, 23)
-    )
-
-    assert [dia["quartos_ocupados"] for dia in resultado] == [
-        1, 2, 1, 1, 0
-    ]
-
-    assert [dia["percentual_ocupacao"] for dia in resultado] == [
-        33.33, 66.67, 33.33, 33.33, 0.0
-    ]
+def test_reserva_finalizada_conta_no_historico(repo):
+    s = ServicoReservas(repo)
+    s.criar_reserva(id="r1", numero_quarto="101",
+                    data_entrada=date(2026, 12, 2), data_saida=date(2026, 12, 4),
+                    hospedes_ids=["h1"], qtd_hospedes=1)
+    s.check_in("r1", hoje=date(2026, 12, 2))
+    s.check_out("r1")
+    rel = RelatorioOcupacao(repo)
+    assert rel.taxa_ocupacao(date(2026, 12, 1), date(2026, 12, 8)) == pytest.approx(1 / 7)
 
 
-def test_reservas_canceladas_nao_contam(banco_teste):
-    """Reservas canceladas não devem aumentar a ocupação."""
-
-    cadastrar_quartos(banco_teste, ["101", "102"])
-
-    cadastrar_reserva(
-        banco_teste, "R1", "101", "2026-10-19", "2026-10-21"
-    )
-    cadastrar_reserva(
-        banco_teste,
-        "R2",
-        "102",
-        "2026-10-19",
-        "2026-10-21",
-        status="Cancelada"
-    )
-
-    resultado = relatorios.relatorio_ocupacao(
-        date(2026, 10, 19),
-        date(2026, 10, 19)
-    )
-
-    assert resultado[0]["quartos_ocupados"] == 1
-    assert resultado[0]["total_quartos"] == 2
-    assert resultado[0]["percentual_ocupacao"] == 50.0
+def test_ocupacao_por_quarto(repo):
+    s = ServicoReservas(repo)
+    s.criar_reserva(id="r1", numero_quarto="101",
+                    data_entrada=date(2026, 12, 2), data_saida=date(2026, 12, 5),
+                    hospedes_ids=["h1"], qtd_hospedes=1)
+    rel = RelatorioOcupacao(repo)
+    por_quarto = rel.ocupacao_por_quarto(date(2026, 12, 1), date(2026, 12, 8))
+    assert por_quarto == {"101": 3, "102": 0}
 
 
-def test_rejeita_data_inicial_posterior(banco_teste):
-    """A data inicial não pode ser posterior à data final."""
-
+def test_periodo_invalido(repo):
+    rel = RelatorioOcupacao(repo)
     with pytest.raises(ValueError):
-        relatorios.relatorio_ocupacao(
-            date(2026, 10, 23),
-            date(2026, 10, 19)
-        )
-
-
-@pytest.mark.parametrize(
-    "data_inicio, data_fim",
-    [
-        ("2026-10-19", date(2026, 10, 23)),
-        (date(2026, 10, 19), "2026-10-23"),
-    ]
-)
-def test_rejeita_datas_que_nao_sao_date(
-    banco_teste,
-    data_inicio,
-    data_fim
-):
-    """As datas devem ser objetos datetime.date."""
-
-    with pytest.raises(ValueError):
-        relatorios.relatorio_ocupacao(data_inicio, data_fim)
+        rel.taxa_ocupacao(date(2026, 12, 8), date(2026, 12, 1))
