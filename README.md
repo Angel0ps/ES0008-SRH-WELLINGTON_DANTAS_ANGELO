@@ -9,6 +9,86 @@ Além disto, buscarei aprender a utilizar as ferramentas FastAPI e SQlite para o
 
 ---
 
+## Como executar a API
+
+A API utiliza a biblioteca padrão do Python e SQLite, sem precisar instalar um framework web.
+
+Na raiz do repositório, execute:
+
+```bash
+# Iniciar o servidor na porta padrão 8000
+python -m app.api
+
+# Ou escolher outra porta
+python -m app.api --porta 8080
+
+# Opcional: definir o caminho do banco SQLite
+python -m app.api --db srh_wda.db
+```
+
+Mantenha o terminal aberto enquanto utiliza a API. Para encerrar, pressione `Ctrl+C`.
+O banco padrão é `srh_wda.db`, na raiz do projeto.
+
+### Endpoints disponíveis
+
+| Método | Endpoint | Finalidade |
+|---|---|---|
+| `GET` | `/quartos` | Listar quartos |
+| `POST` | `/quartos` | Cadastrar quarto |
+| `GET` | `/hospedes` | Listar hóspedes |
+| `POST` | `/hospedes` | Cadastrar hóspede |
+| `GET` | `/reservas` | Listar reservas |
+| `GET` | `/reservas/{id}` | Consultar reserva |
+| `POST` | `/reservas` | Criar reserva |
+| `POST` | `/reservas/{id}/checkin` | Registrar check-in |
+| `POST` | `/reservas/{id}/checkout` | Registrar check-out |
+| `POST` | `/reservas/{id}/cancelar` | Cancelar reserva |
+| `POST` | `/reservas/{id}/noshow` | Registrar não comparecimento |
+| `POST` | `/reservas/{id}/pagamentos` | Lançar pagamento |
+| `POST` | `/reservas/{id}/adicionais` | Lançar adicional |
+| `GET` | `/relatorios/ocupacao?inicio=AAAA-MM-DD&fim=AAAA-MM-DD` | Consultar ocupação |
+
+### Testar os endpoints
+
+Os exemplos abaixo usam `curl` e assumem que o servidor está na porta `8000`.
+
+```bash
+# Cadastrar quarto
+curl -i -X POST http://localhost:8000/quartos \
+  -H 'Content-Type: application/json' \
+  -d '{"numero":"101","capacidade":2,"diaria":100.0,"tipo":"Simples"}'
+
+# Cadastrar hóspede
+curl -i -X POST http://localhost:8000/hospedes \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"h1","nome":"Ana Souza","documento":"12345678901","email":"ana@mail.com","telefone":"88999998888"}'
+
+# Criar reserva
+curl -i -X POST http://localhost:8000/reservas \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"r1","quarto":"101","entrada":"2026-12-10","saida":"2026-12-12","hospedes_ids":["h1"],"qtd_hospedes":1}'
+
+# Consultar reservas
+curl -i http://localhost:8000/reservas
+
+# Consultar relatório de ocupação
+curl -i 'http://localhost:8000/relatorios/ocupacao?inicio=2026-12-01&fim=2026-12-31'
+```
+
+A API responde em JSON. Erros de validação das regras de negócio retornam `422`; campos obrigatórios ausentes ou parâmetros inválidos retornam `400`; recursos inexistentes retornam `404`.
+
+### Executar os testes automatizados
+
+Na raiz do projeto, com `pytest` instalado:
+
+```bash
+python -m pytest -q
+```
+
+Os testes usam banco SQLite em memória para não alterar os dados persistidos do projeto.
+
+---
+
 ## Estrutura planejada de classes
 ```
 app/
