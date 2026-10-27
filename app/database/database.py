@@ -6,10 +6,21 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parents[2]
 DB_PATH = BASE_DIR / "srh_wda.db"
 
+self.conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+
+import sqlite3
+from pathlib import Path
+
+# Caminho do banco de dados
+BASE_DIR = Path(__file__).resolve().parents[2]
+DB_PATH = BASE_DIR / "srh_wda.db"
 
 def conectar():
     """Abre uma conexão com o banco de dados."""
-    conexao = sqlite3.connect(DB_PATH)
+    conexao = sqlite3.connect(
+        DB_PATH,
+        check_same_thread=False
+    )
     conexao.row_factory = sqlite3.Row
     conexao.execute("PRAGMA foreign_keys = ON")
     return conexao
@@ -76,4 +87,3 @@ def criar_tabelas():
 if __name__ == "__main__":
     criar_tabelas()
     print("Banco de dados inicializado.")
-
