@@ -8,12 +8,12 @@ class Quarto():
     def __init__(self, numero: str, capacidade: int, diaria: float,
                  status: str = "disponivel", bloqueios: list | None = None,
                  observacoes: str = ""):
-        self.numero = numero
-        self.capacidade = capacidade
-        self.diaria = diaria
-        self.status = status
-        self.bloqueios = bloqueios if bloqueios is not None else []
-        self.observacoes = observacoes
+        self.__numero = numero
+        self.__capacidade = capacidade
+        self.__diaria = diaria
+        self.__status = status
+        self.__bloqueios = bloqueios if bloqueios is not None else []
+        self.__observacoes = observacoes
 
     # ================================ métodos =============================
 
