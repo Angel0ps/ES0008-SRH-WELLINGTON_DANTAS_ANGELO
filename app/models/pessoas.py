@@ -14,11 +14,11 @@ class Pessoa: # Concentra os dados comuns (nome, documento, email, telefone, id)
             raise TypeError(
                 "Pessoa é abstrata e não pode ser instanciada diretamente.\n Use Hospede ou Funcionario."
             )
-        self.id = id
-        self.nome = nome
-        self.documento = documento
-        self.email = email
-        self.telefone = telefone
+        self.__id = id
+        self.__nome = nome
+        self.__documento = documento
+        self.__email = email
+        self.__telefone = telefone
 
     # =========== id ============
     @property
