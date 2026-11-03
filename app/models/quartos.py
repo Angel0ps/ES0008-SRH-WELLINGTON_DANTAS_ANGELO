@@ -12,25 +12,15 @@ class Quarto(ABC):
 
     STATUS_VALIDOS = ("disponivel", "ocupado", "manutencao", "bloqueado")
 
-    def __init__(
-        self,
-        numero: str,
-        capacidade: int,
-        diaria: float,
-        status: str = "disponivel",
-        bloqueios: list | None = None,
-        observacoes: str = "",
-        diferencial: str = "",
-    ):
-        # Usar as propriedades garante que as validações também ocorram
-        # durante a criação do objeto (e não apenas em alterações posteriores).
-        self.numero = numero
-        self.capacidade = capacidade
-        self.diaria = diaria
-        self.status = status
-        self.bloqueios = bloqueios if bloqueios is not None else []
-        self.observacoes = observacoes
-        self.diferencial = diferencial
+    def __init__(self, numero: str, capacidade: int, diaria: float,
+                 status: str = "disponivel", bloqueios: list | None = None,
+                 observacoes: str = ""):
+        self.__numero = numero
+        self.__capacidade = capacidade
+        self.__diaria = diaria
+        self.__status = status
+        self.__bloqueios = bloqueios if bloqueios is not None else []
+        self.__observacoes = observacoes
 
     # ================================ propriedades =============================
 
@@ -177,11 +167,4 @@ class Duplo(Quarto):
 
 
 class Luxo(Quarto):
-    def requisitarQuarto(self) -> str:
-        return super().requisitarQuarto()
-
-    def diferenciarLuxo(self) -> str:
-        return self.diferencial or "Quarto da categoria luxo."
-
-    def observacoesLuxo(self) -> str:
-        return self.observacoes or "Sem observações adicionais para o quarto de luxo."
+    pass
