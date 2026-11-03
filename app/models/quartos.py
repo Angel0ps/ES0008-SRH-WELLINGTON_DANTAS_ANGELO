@@ -14,13 +14,16 @@ class Quarto(ABC):
 
     def __init__(self, numero: str, capacidade: int, diaria: float,
                  status: str = "disponivel", bloqueios: list | None = None,
-                 observacoes: str = ""):
-        self.__numero = numero
-        self.__capacidade = capacidade
-        self.__diaria = diaria
-        self.__status = status
-        self.__bloqueios = bloqueios if bloqueios is not None else []
-        self.__observacoes = observacoes
+                 observacoes: str = "", diferencial: str = ""):
+        # Inicializa pelos setters para aplicar as mesmas validações
+        # tanto na criação quanto nas alterações posteriores.
+        self.numero = numero
+        self.capacidade = capacidade
+        self.diaria = diaria
+        self.status = status
+        self.bloqueios = bloqueios if bloqueios is not None else []
+        self.observacoes = observacoes
+        self.diferencial = diferencial
 
     # ================================ propriedades =============================
 
@@ -167,4 +170,11 @@ class Duplo(Quarto):
 
 
 class Luxo(Quarto):
-    pass
+    def requisitarQuarto(self) -> str:
+        return super().requisitarQuarto()
+
+    def diferenciarLuxo(self) -> str:
+        return self.diferencial or "Quarto da categoria luxo."
+
+    def observacoesLuxo(self) -> str:
+        return self.observacoes or "Sem observações adicionais para o quarto luxo."
