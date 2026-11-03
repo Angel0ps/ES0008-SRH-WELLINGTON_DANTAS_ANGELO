@@ -1,1 +1,0 @@
-# Rota para gerenciar bloqueios

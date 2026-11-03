@@ -6,8 +6,8 @@ from abc import ABC, abstractmethod
 class Quarto(ABC):
     """Representa um quarto e concentra as validações comuns.
 
-    A classe permanece instanciável por compatibilidade com os testes e
-    consumidores atuais. No UML, ela está indicada como abstrata.
+    A classe é abstrata: as categorias concretas implementam
+    requisitarQuarto() e herdam as validações comuns.
     """
 
     STATUS_VALIDOS = ("disponivel", "ocupado", "manutencao", "bloqueado")

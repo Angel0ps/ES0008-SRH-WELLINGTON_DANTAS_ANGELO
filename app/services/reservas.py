@@ -110,6 +110,17 @@ class ServicoReservas:
         reserva pode coincidir com o check-in de outra. Reservas
         Canceladas e No-shows não ocupam o quarto.
         """
+        # Bloqueios por período são inclusivos no calendário; reservas usam
+        # intervalo semiaberto [entrada, saída).
+        for bloqueio in self.repositorio.listar_bloqueios(quarto_numero=numero_quarto):
+            if _norm(bloqueio.status) not in ("ativo", "confirmado"):
+                continue
+            if entrada <= bloqueio.data_fim and bloqueio.data < saida:
+                raise ValueError(
+                    f"Quarto {numero_quarto} bloqueado de {bloqueio.data} a "
+                    f"{bloqueio.data_fim}: {bloqueio.motivo or bloqueio.tipo}"
+                )
+
         for outra in self.repositorio.listar_reservas():
             if outra.quarto_relacionado != numero_quarto:
                 continue
@@ -205,6 +216,9 @@ class ServicoReservas:
 
         reserva.cancelarReserva()  # status -> Cancelada
         self.repositorio.salvar_reserva(reserva)
+        self.repositorio.salvar_penalidade(
+            reserva.id, "cancelamento", multa, hoje
+        )
 
         return multa
 
@@ -230,7 +244,11 @@ class ServicoReservas:
         multa = diaria * MULTA_NO_SHOW_DIARIAS
 
         reserva.status = "No-show"
+        reserva.rastrearEdicao("sistema", "No-show registrado.")
         self.repositorio.salvar_reserva(reserva)
+        self.repositorio.salvar_penalidade(
+            reserva.id, "no_show", multa, hoje
+        )
 
         return multa
 
@@ -241,11 +259,14 @@ class ServicoReservas:
         id: str,
         forma: str,
         valor: float,
-        data: date | None = None
+        data: date | None = None,
+        categoria: str = "hospedagem"
     ) -> Pagamento:
         reserva = self._obter_reserva(reserva_id)
 
-        pagamento = Pagamento(id, reserva.id, forma, valor, data or date.today())
+        pagamento = Pagamento(
+            id, reserva.id, forma, valor, data or date.today(), categoria=categoria
+        )
         reserva.pagamentos.append(pagamento)
         self.repositorio.salvar_reserva(reserva)
 

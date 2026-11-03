@@ -397,7 +397,8 @@ class Pagamento(Rastreabilidade):
         data=None,
         metodo=None,
         reserva_id=None,
-        forma=None
+        forma=None,
+        categoria="hospedagem"
     ):
         # Aceita a assinatura do modelo (id, valor, data, metodo) e
         # a assinatura histórica do serviço/testes (id, reserva_id, forma, valor[, data]).
@@ -427,6 +428,7 @@ class Pagamento(Rastreabilidade):
         self.data = data or date.today()
         self.metodo = metodo
         self.reserva_id = reserva_id
+        self.categoria = categoria
 
         Rastreabilidade.__init__(self)
 
@@ -503,6 +505,18 @@ class Pagamento(Rastreabilidade):
     @forma.setter
     def forma(self, valor):
         self.metodo = valor
+
+    @property
+    def categoria(self) -> str:
+        return self.__categoria
+
+    @categoria.setter
+    def categoria(self, valor: str) -> None:
+        categorias = {"hospedagem", "adicional", "outro"}
+        categoria = str(valor).strip().casefold() if valor is not None else ""
+        if categoria not in categorias:
+            raise ValueError("Categoria deve ser hospedagem, adicional ou outro")
+        self.__categoria = categoria
 
 
 class Adicional:
@@ -594,35 +608,50 @@ class Adicional:
 # ==================================================== Subclasse Bloqueio ====================================================
 
 class Bloqueio(Registro, Rastreabilidade):
-    # Indisponibilização temporária de um quarto.
+    """Indisponibilização de um quarto por um intervalo de datas.
+
+    ``data`` representa o início; ``data_fim`` é inclusiva.
+    """
 
     def __init__(
         self,
         id: str,
         quarto_relacionado: str,
         data: date,
-        tipo: str,
-        status: str,
-        criado_por: str = "sistema"
+        tipo: str = "manutencao",
+        status: str = "ativo",
+        criado_por: str = "sistema",
+        data_fim: date | None = None,
+        motivo: str = "",
     ):
-        super().__init__(
-            id,
-            quarto_relacionado,
-            data,
-            tipo,
-            status
-        )
-
+        super().__init__(id, quarto_relacionado, data, tipo, status)
+        self.data_fim = data_fim or data
+        self.motivo = motivo
         Rastreabilidade.__init__(self, criado_por)
+
+    @property
+    def data_fim(self) -> date:
+        return self.__data_fim
+
+    @data_fim.setter
+    def data_fim(self, valor: date) -> None:
+        if not isinstance(valor, date):
+            raise ValueError("Data final do bloqueio deve ser uma data válida")
+        if valor < self.data:
+            raise ValueError("Data final do bloqueio não pode anteceder a data inicial")
+        self.__data_fim = valor
+
+    @property
+    def motivo(self) -> str:
+        return self.__motivo
+
+    @motivo.setter
+    def motivo(self, valor: str) -> None:
+        self.__motivo = str(valor or "").strip()
 
     def cancelar(self, responsavel: str = "sistema"):
         self.status = "cancelado"
-
-        self.rastrearEdicao(
-            responsavel,
-            "Bloqueio cancelado."
-        )
-
+        self.rastrearEdicao(responsavel, "Bloqueio cancelado.")
         return f"Bloqueio {self.id} cancelado."
 
 

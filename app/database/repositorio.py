@@ -11,7 +11,7 @@ Uso:
     repo.fechar()
 
 A conexão é persistente e protegida por RLock, o que permite reutilizá-la
-com ThreadingHTTPServer e também permite testes com banco ":memory:".
+com a API FastAPI e também permite testes com banco ":memory:".
 """
 
 import sqlite3
@@ -20,7 +20,7 @@ from datetime import date
 from pathlib import Path
 
 from app.models.quartos import Simples, Duplo, Luxo
-from app.models.pessoas import Hospede
+from app.models.pessoas import Hospede, Funcionario
 from app.models.registros import Reserva, Pagamento, Adicional, Bloqueio
 
 TIPOS_QUARTO = {
@@ -100,6 +100,7 @@ class Repositorio:
                     data_pagamento TEXT NOT NULL,
                     forma TEXT NOT NULL DEFAULT 'Não informado',
                     metodo TEXT NOT NULL DEFAULT 'Não informado',
+                    categoria TEXT NOT NULL DEFAULT 'hospedagem' CHECK (categoria IN ('hospedagem', 'adicional', 'outro')),
                     FOREIGN KEY (reserva_id) REFERENCES reservas(id) ON DELETE CASCADE
                 );
 
@@ -116,10 +117,35 @@ class Repositorio:
                     id TEXT PRIMARY KEY,
                     quarto_numero TEXT NOT NULL,
                     data_bloqueio TEXT NOT NULL,
-                    tipo TEXT NOT NULL DEFAULT 'bloqueio',
-                    status TEXT NOT NULL,
-                    FOREIGN KEY (quarto_numero) REFERENCES quartos(numero)
+                    data_fim TEXT NOT NULL DEFAULT '1970-01-01',
+                    motivo TEXT NOT NULL DEFAULT '',
+                    tipo TEXT NOT NULL DEFAULT 'manutencao',
+                    status TEXT NOT NULL DEFAULT 'ativo',
+                    FOREIGN KEY (quarto_numero) REFERENCES quartos(numero),
+                    CHECK (data_fim >= data_bloqueio)
                 );
+
+                CREATE TABLE IF NOT EXISTS funcionarios (
+                    id TEXT PRIMARY KEY,
+                    nome TEXT NOT NULL,
+                    documento TEXT NOT NULL UNIQUE,
+                    email TEXT NOT NULL,
+                    telefone TEXT NOT NULL,
+                    cargo TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS penalidades (
+                    id TEXT PRIMARY KEY,
+                    reserva_id TEXT NOT NULL,
+                    tipo TEXT NOT NULL CHECK (tipo IN ('cancelamento', 'no_show')),
+                    valor REAL NOT NULL CHECK (valor >= 0),
+                    data_evento TEXT NOT NULL,
+                    UNIQUE (reserva_id, tipo),
+                    FOREIGN KEY (reserva_id) REFERENCES reservas(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_penalidades_data
+                    ON penalidades (data_evento, tipo);
 
                 CREATE TABLE IF NOT EXISTS rastreabilidade (
                     registro_id TEXT NOT NULL,
@@ -146,6 +172,10 @@ class Repositorio:
 
                 CREATE INDEX IF NOT EXISTS idx_historico_registro
                     ON historico_rastreabilidade (registro_id, tipo_registro, data_evento);
+                CREATE INDEX IF NOT EXISTS idx_reservas_periodo
+                    ON reservas (status, data_entrada, data_saida);
+                CREATE INDEX IF NOT EXISTS idx_reservas_criacao
+                    ON reservas (data_reserva, status);
                 """
             )
             # Migração simples para bancos criados por versões anteriores.
@@ -161,6 +191,16 @@ class Repositorio:
             self._adicionar_coluna_se_ausente("reservas", "hospede_id", "TEXT")
             self._adicionar_coluna_se_ausente("pagamentos", "forma", "TEXT NOT NULL DEFAULT 'Não informado'")
             self._adicionar_coluna_se_ausente("pagamentos", "metodo", "TEXT NOT NULL DEFAULT 'Não informado'")
+            self._adicionar_coluna_se_ausente(
+                "pagamentos", "categoria",
+                "TEXT NOT NULL DEFAULT 'hospedagem' CHECK (categoria IN ('hospedagem', 'adicional', 'outro'))"
+            )
+            self._adicionar_coluna_se_ausente("bloqueios", "data_fim", "TEXT NOT NULL DEFAULT '1970-01-01'")
+            self._adicionar_coluna_se_ausente("bloqueios", "motivo", "TEXT NOT NULL DEFAULT ''")
+            # Bloqueios legados eram pontuais; a migração preserva a data como início e fim.
+            self.conn.execute(
+                "UPDATE bloqueios SET data_fim = data_bloqueio WHERE data_fim = '1970-01-01'"
+            )
             # Mantém o valor legado disponível após a migração.
             self.conn.execute(
                 "UPDATE pagamentos SET forma = metodo WHERE forma = 'Não informado' AND metodo != 'Não informado'"
@@ -382,6 +422,40 @@ class Repositorio:
             acessibilidade=bool(linha["acessibilidade"]),
         )
 
+    # ---------------------------- funcionários ---------------------------
+    def salvar_funcionario(self, funcionario) -> None:
+        with self._lock, self.conn:
+            self.conn.execute(
+                """INSERT INTO funcionarios (id, nome, documento, email, telefone, cargo)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       nome=excluded.nome, documento=excluded.documento,
+                       email=excluded.email, telefone=excluded.telefone, cargo=excluded.cargo""",
+                (funcionario.id, funcionario.nome, funcionario.documento,
+                 funcionario.email, funcionario.telefone, funcionario.cargo),
+            )
+
+    def obter_funcionario(self, funcionario_id: str):
+        with self._lock:
+            linha = self.conn.execute(
+                "SELECT * FROM funcionarios WHERE id = ?", (str(funcionario_id),)
+            ).fetchone()
+            return self._funcionario_de_linha(linha) if linha else None
+
+    def listar_funcionarios(self) -> list:
+        with self._lock:
+            linhas = self.conn.execute(
+                "SELECT * FROM funcionarios ORDER BY nome, id"
+            ).fetchall()
+            return [self._funcionario_de_linha(linha) for linha in linhas]
+
+    @staticmethod
+    def _funcionario_de_linha(linha):
+        return Funcionario(
+            id=linha["id"], nome=linha["nome"], documento=linha["documento"],
+            email=linha["email"], telefone=linha["telefone"], cargo=linha["cargo"],
+        )
+
     # ------------------------------ reservas -----------------------------
     def salvar_reserva(self, reserva) -> None:
         hospedes_ids = list(
@@ -505,17 +579,19 @@ class Repositorio:
     def salvar_bloqueio(self, bloqueio) -> None:
         with self._lock, self.conn:
             self.conn.execute(
-                """INSERT INTO bloqueios (id, quarto_numero, data_bloqueio, tipo, status)
-                   VALUES (?, ?, ?, ?, ?)
+                """INSERT INTO bloqueios
+                   (id, quarto_numero, data_bloqueio, data_fim, motivo, tipo, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(id) DO UPDATE SET
                        quarto_numero=excluded.quarto_numero,
                        data_bloqueio=excluded.data_bloqueio,
-                       tipo=excluded.tipo,
-                       status=excluded.status""",
+                       data_fim=excluded.data_fim, motivo=excluded.motivo,
+                       tipo=excluded.tipo, status=excluded.status""",
                 (
                     bloqueio.id, bloqueio.quarto_relacionado,
                     self._data(bloqueio.data).isoformat(),
-                    getattr(bloqueio, "tipo", "bloqueio"), bloqueio.status,
+                    self._data(bloqueio.data_fim).isoformat(), bloqueio.motivo,
+                    getattr(bloqueio, "tipo", "manutencao"), bloqueio.status,
                 ),
             )
             self._salvar_rastreabilidade_no_contexto(bloqueio, "Bloqueio")
@@ -533,6 +609,8 @@ class Repositorio:
                 data=self._data(linha["data_bloqueio"]),
                 tipo=linha["tipo"],
                 status=linha["status"],
+                data_fim=self._data(linha["data_fim"]),
+                motivo=linha["motivo"],
             )
             return self._carregar_rastreabilidade(bloqueio, "Bloqueio")
 
@@ -554,8 +632,8 @@ class Repositorio:
         forma = getattr(pagamento, "forma", getattr(pagamento, "metodo", "Não informado"))
         self.conn.execute(
             """
-            INSERT INTO pagamentos (id, reserva_id, valor, data_pagamento, forma, metodo)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO pagamentos (id, reserva_id, valor, data_pagamento, forma, metodo, categoria)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 pagamento.id,
@@ -564,6 +642,7 @@ class Repositorio:
                 self._data(pagamento.data).isoformat(),
                 forma,
                 forma,
+                getattr(pagamento, "categoria", "hospedagem"),
             ),
         )
         self._salvar_rastreabilidade_no_contexto(pagamento, "Pagamento")
@@ -590,6 +669,7 @@ class Repositorio:
             valor=linha["valor"],
             data=Repositorio._data(linha["data_pagamento"]),
             metodo=linha["forma"],
+            categoria=linha["categoria"],
         )
         # Compatibilidade com a API/serviço que chama a forma de pagamento "forma".
         pagamento.forma = linha["forma"]
@@ -606,6 +686,98 @@ class Repositorio:
         )
         adicional.reserva_id = linha["reserva_id"]
         return adicional
+
+    def listar_pagamentos(
+        self, inicio: date | None = None, fim: date | None = None,
+        categoria: str | None = None
+    ) -> list[dict]:
+        """Lista recebimentos efetivos por data, opcionalmente por categoria."""
+        filtros = []
+        parametros = []
+        if inicio is not None:
+            filtros.append("data_pagamento >= ?")
+            parametros.append(self._data(inicio).isoformat())
+        if fim is not None:
+            filtros.append("data_pagamento < ?")
+            parametros.append(self._data(fim).isoformat())
+        if categoria is not None:
+            filtros.append("categoria = ?")
+            parametros.append(str(categoria).strip().casefold())
+        sql = "SELECT * FROM pagamentos"
+        if filtros:
+            sql += " WHERE " + " AND ".join(filtros)
+        sql += " ORDER BY data_pagamento, id"
+        with self._lock:
+            linhas = self.conn.execute(sql, parametros).fetchall()
+            return [
+                {
+                    "id": linha["id"], "reserva_id": linha["reserva_id"],
+                    "valor": float(linha["valor"]),
+                    "data": self._data(linha["data_pagamento"]),
+                    "forma": linha["forma"], "categoria": linha["categoria"],
+                }
+                for linha in linhas
+            ]
+
+    # ------------------------------ penalidades -------------------------
+    def salvar_penalidade(
+        self, reserva_id: str, tipo: str, valor: float, data_evento: date
+    ) -> dict:
+        """Persiste multa de cancelamento/no-show para auditoria e relatórios."""
+        from uuid import uuid4
+
+        if tipo not in ("cancelamento", "no_show"):
+            raise ValueError("Tipo de penalidade inválido")
+        if isinstance(valor, bool) or not isinstance(valor, (int, float)) or valor < 0:
+            raise ValueError("Valor da penalidade deve ser não negativo")
+        if not isinstance(data_evento, date):
+            raise ValueError("Data da penalidade deve ser uma data válida")
+        penalidade = {
+            "id": str(uuid4()),
+            "reserva_id": str(reserva_id),
+            "tipo": tipo,
+            "valor": float(valor),
+            "data_evento": data_evento.isoformat(),
+        }
+        with self._lock, self.conn:
+            self.conn.execute(
+                """INSERT INTO penalidades (id, reserva_id, tipo, valor, data_evento)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    penalidade["id"], penalidade["reserva_id"], penalidade["tipo"],
+                    penalidade["valor"], penalidade["data_evento"],
+                ),
+            )
+        return penalidade
+
+    def listar_penalidades(
+        self, inicio: date | None = None, fim: date | None = None
+    ) -> list[dict]:
+        with self._lock:
+            sql = """SELECT id, reserva_id, tipo, valor, data_evento
+                     FROM penalidades"""
+            parametros = []
+            filtros = []
+            if inicio is not None:
+                filtros.append("data_evento >= ?")
+                parametros.append(self._data(inicio).isoformat())
+            if fim is not None:
+                filtros.append("data_evento < ?")
+                parametros.append(self._data(fim).isoformat())
+            if filtros:
+                sql += " WHERE " + " AND ".join(filtros)
+            sql += " ORDER BY data_evento, id"
+            linhas = self.conn.execute(sql, parametros).fetchall()
+            return [
+                {
+                    "id": linha["id"],
+                    "reserva_id": linha["reserva_id"],
+                    "tipo": linha["tipo"],
+                    "valor": float(linha["valor"]),
+                    "data_evento": linha["data_evento"],
+                }
+                for linha in linhas
+            ]
 
     # ------------------------------ encerramento -------------------------
     def fechar(self) -> None:

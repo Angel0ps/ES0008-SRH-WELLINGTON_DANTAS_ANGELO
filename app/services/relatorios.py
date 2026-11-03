@@ -1,58 +1,180 @@
-from app.services.reservas import _norm
+"""Relatórios operacionais e financeiros do SRH.
 
-# status que ocuparam/ocupam o quarto (para histórico de ocupação)
+Os períodos usam intervalo semiaberto [inicio, fim): a data final não é
+incluída. ADR e RevPAR usam pagamentos efetivamente recebidos e classificados
+como hospedagem, filtrados pela data de recebimento. As noites vendidas são
+obtidas das reservas que ocuparam o quarto no período.
+"""
+
+from datetime import date
+
+from app.services.tarifas import Tarifa
+
+
 STATUS_CONTAM_OCUPACAO = ("confirmada", "hospedado", "finalizada")
+STATUS_CONTAM_RECEITA = ("confirmada", "hospedado", "finalizada")
 
 
-# ==================================================== Relatório de Ocupação ====================================================
+def _normalizar_status(valor: str) -> str:
+    return str(valor).strip().casefold()
+
+
+def _validar_periodo(inicio: date, fim: date) -> None:
+    if not isinstance(inicio, date) or not isinstance(fim, date):
+        raise ValueError("Início e fim devem ser datas válidas")
+    if fim <= inicio:
+        raise ValueError("O fim do período deve ser posterior ao início")
+
+
 class RelatorioOcupacao:
-    """Calcula a taxa de ocupação por período.
+    """Calcula noites ocupadas e taxa de ocupação no período [início, fim)."""
 
-    taxa = noites ocupadas / (quantidade de quartos x dias do período).
-    Reservas Canceladas e No-shows não ocupam o quarto.
+    def __init__(self, repositorio):
+        self.repositorio = repositorio
+
+    @staticmethod
+    def _noites_no_periodo(reserva, inicio: date, fim: date) -> int:
+        ini = max(reserva.data_entrada, inicio)
+        fim_reserva = min(reserva.data_saida, fim)
+        return max(0, (fim_reserva - ini).days)
+
+    def ocupacao_por_quarto(self, inicio: date, fim: date) -> dict:
+        _validar_periodo(inicio, fim)
+        resultado = {q.numero: 0 for q in self.repositorio.listar_quartos()}
+        for reserva in self.repositorio.listar_reservas():
+            if _normalizar_status(reserva.status) not in STATUS_CONTAM_OCUPACAO:
+                continue
+            if reserva.quarto_relacionado in resultado:
+                resultado[reserva.quarto_relacionado] += self._noites_no_periodo(
+                    reserva, inicio, fim
+                )
+        return resultado
+
+    def taxa_ocupacao(self, inicio: date, fim: date) -> float:
+        _validar_periodo(inicio, fim)
+        quartos = self.repositorio.listar_quartos()
+        if not quartos:
+            return 0.0
+        noites = sum(self.ocupacao_por_quarto(inicio, fim).values())
+        capacidade = len(quartos) * (fim - inicio).days
+        return noites / capacidade if capacidade else 0.0
+
+    def gerar(self, inicio: date, fim: date) -> dict:
+        por_quarto = self.ocupacao_por_quarto(inicio, fim)
+        return {
+            "inicio": inicio.isoformat(),
+            "fim": fim.isoformat(),
+            "noites_ocupadas": sum(por_quarto.values()),
+            "noites_disponiveis": len(por_quarto) * (fim - inicio).days,
+            "taxa_ocupacao": self.taxa_ocupacao(inicio, fim),
+            "noites_por_quarto": por_quarto,
+        }
+
+
+class RelatorioReceita:
+    """Calcula ADR e RevPAR a partir dos recebimentos de hospedagem.
+
+    O numerador considera pagamentos da categoria ``hospedagem`` recebidos
+    no período. O denominador considera noites de reservas confirmadas,
+    hospedadas ou finalizadas que se sobrepõem ao período. Pagamentos de
+    adicionais e outras categorias não entram na receita de hospedagem.
     """
 
     def __init__(self, repositorio):
         self.repositorio = repositorio
 
-    def _noites_no_periodo(self, reserva, inicio, fim) -> int:
-        """Noites da reserva dentro de [inicio, fim): interseção de intervalos."""
-        ini = max(reserva.data_entrada, inicio)
-        fim_r = min(reserva.data_saida, fim)
-
-        return max(0, (fim_r - ini).days)
-
-    def taxa_ocupacao(self, inicio, fim) -> float:
-        """Taxa de ocupação geral no período [inicio, fim)."""
-        if fim <= inicio:
-            raise ValueError("O fim do período deve ser posterior ao início")
-
+    def _metricas(self, inicio: date, fim: date) -> dict:
+        _validar_periodo(inicio, fim)
         quartos = self.repositorio.listar_quartos()
+        reservas = self.repositorio.listar_reservas()
+        quartos_por_numero = {q.numero for q in quartos}
+        noites_vendidas = 0
 
-        if not quartos:
-            return 0.0
-
-        dias = (fim - inicio).days
-        noites = 0
-
-        for reserva in self.repositorio.listar_reservas():
-            if _norm(reserva.status) not in STATUS_CONTAM_OCUPACAO:
+        for reserva in reservas:
+            if _normalizar_status(reserva.status) not in STATUS_CONTAM_RECEITA:
                 continue
-            noites += self._noites_no_periodo(reserva, inicio, fim)
-
-        return noites / (len(quartos) * dias)
-
-    def ocupacao_por_quarto(self, inicio, fim) -> dict:
-        """Dicionario {numero_do_quarto: noites ocupadas} no período."""
-        if fim <= inicio:
-            raise ValueError("O fim do período deve ser posterior ao início")
-
-        resultado = {q.numero: 0 for q in self.repositorio.listar_quartos()}
-
-        for reserva in self.repositorio.listar_reservas():
-            if _norm(reserva.status) not in STATUS_CONTAM_OCUPACAO:
+            if reserva.quarto_relacionado not in quartos_por_numero:
                 continue
-            if reserva.quarto_relacionado in resultado:
-                resultado[reserva.quarto_relacionado] += self._noites_no_periodo(reserva, inicio, fim)
+            entrada = max(reserva.data_entrada, inicio)
+            saida = min(reserva.data_saida, fim)
+            if saida > entrada:
+                noites_vendidas += (saida - entrada).days
 
-        return resultado
+        pagamentos = self.repositorio.listar_pagamentos(
+            inicio, fim, categoria="hospedagem"
+        )
+        receita = sum(pagamento["valor"] for pagamento in pagamentos)
+        noites_disponiveis = len(quartos) * (fim - inicio).days
+        adr = receita / noites_vendidas if noites_vendidas else 0.0
+        revpar = receita / noites_disponiveis if noites_disponiveis else 0.0
+        return {
+            "inicio": inicio.isoformat(),
+            "fim": fim.isoformat(),
+            "receita_hospedagem": round(receita, 2),
+            "receita_hospedagem_recebida": round(receita, 2),
+            "pagamentos_hospedagem": len(pagamentos),
+            "noites_vendidas": noites_vendidas,
+            "noites_disponiveis": noites_disponiveis,
+            "adr": round(adr, 2),
+            "revpar": round(revpar, 2),
+        }
+
+    def adr(self, inicio: date, fim: date) -> float:
+        return self._metricas(inicio, fim)["adr"]
+
+    def revpar(self, inicio: date, fim: date) -> float:
+        return self._metricas(inicio, fim)["revpar"]
+
+    def gerar(self, inicio: date, fim: date) -> dict:
+        return self._metricas(inicio, fim)
+
+
+class RelatorioCancelamentos:
+    """Consolida cancelamentos, no-shows e multas registradas no SQLite."""
+
+    def __init__(self, repositorio):
+        self.repositorio = repositorio
+
+    def gerar(self, inicio: date, fim: date) -> dict:
+        _validar_periodo(inicio, fim)
+        # Contagens e multas do relatório são filtradas pela data do evento.
+        registros = self.repositorio.listar_penalidades(inicio, fim)
+        cancelamentos = [p for p in registros if p["tipo"] == "cancelamento"]
+        no_shows = [p for p in registros if p["tipo"] == "no_show"]
+
+        # As taxas são calculadas por coorte: reservas criadas no período e
+        # penalidades associadas a essas mesmas reservas, mesmo que o evento
+        # tenha ocorrido depois do fim do período.
+        reservas_criadas = [
+            r for r in self.repositorio.listar_reservas()
+            if inicio <= r.data < fim
+        ]
+        ids_coorte = {r.id for r in reservas_criadas}
+        penalidades_coorte = [
+            p for p in self.repositorio.listar_penalidades()
+            if p["reserva_id"] in ids_coorte
+        ]
+        cancelamentos_coorte = sum(
+            p["tipo"] == "cancelamento" for p in penalidades_coorte
+        )
+        no_shows_coorte = sum(
+            p["tipo"] == "no_show" for p in penalidades_coorte
+        )
+        total = len(reservas_criadas)
+        total_eventos = len(cancelamentos) + len(no_shows)
+        return {
+            "inicio": inicio.isoformat(),
+            "fim": fim.isoformat(),
+            "reservas_criadas": total,
+            "cancelamentos": len(cancelamentos),
+            "no_shows": len(no_shows),
+            "total_nao_concretizadas": total_eventos,
+            "cancelamentos_da_coorte": cancelamentos_coorte,
+            "no_shows_da_coorte": no_shows_coorte,
+            "taxa_cancelamento": (cancelamentos_coorte / total) if total else 0.0,
+            "taxa_no_show": (no_shows_coorte / total) if total else 0.0,
+            "multas_cancelamento": round(sum(p["valor"] for p in cancelamentos), 2),
+            "multas_no_show": round(sum(p["valor"] for p in no_shows), 2),
+            "total_multas": round(sum(p["valor"] for p in registros), 2),
+            "detalhes": registros,
+        }
