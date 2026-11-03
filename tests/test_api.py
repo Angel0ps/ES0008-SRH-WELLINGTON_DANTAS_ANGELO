@@ -39,7 +39,7 @@ def _req(metodo, url, corpo=None):
 
 def _setup(api):
     _req("POST", f"{api}/quartos",
-         {"numero": "101", "capacidade": 2, "diaria": 100.0, "tipo": "Simples"})
+         {"numero": "101", "capacidade": 2, "diaria": 100.0, "tipo": "Simples", "diferencial": "Acomodação econômica"})
     _req("POST", f"{api}/hospedes", {
         "id": "h1", "nome": "Ana Souza", "documento": "12345678901",
         "email": "ana@mail.com", "telefone": "88999998888",
@@ -56,12 +56,13 @@ def _cria_reserva(api, id="r1", entrada="2026-12-10", saida="2026-12-12"):
 # ==================== cadastros ====================
 def test_post_e_get_quartos(api):
     status, _ = _req("POST", f"{api}/quartos",
-                     {"numero": "101", "capacidade": 2, "diaria": 100.0, "tipo": "Simples"})
+                     {"numero": "101", "capacidade": 2, "diaria": 100.0, "tipo": "Simples", "diferencial": "Acomodação econômica"})
     assert status == 201
     status, quartos = _req("GET", f"{api}/quartos")
     assert status == 200
     assert quartos[0]["numero"] == "101"
     assert quartos[0]["tipo"] == "Simples"
+    assert quartos[0]["diferencial"] == "Acomodação econômica"
 
 
 def test_post_hospede(api):

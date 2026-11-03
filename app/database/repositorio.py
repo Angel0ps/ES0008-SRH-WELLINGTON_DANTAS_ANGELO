@@ -21,21 +21,7 @@ from pathlib import Path
 
 from app.models.quartos import Simples, Duplo, Luxo
 from app.models.pessoas import Hospede
-from app.models.registros import Reserva, Pagamento, Adicional
-
-# Caminho do banco de dados
-BASE_DIR = Path(__file__).resolve().parents[2]
-DB_PATH = BASE_DIR / "srh_wda.db"
-
-def conectar():
-    """Abre uma conexão com o banco de dados."""
-    conexao = sqlite3.connect(
-        DB_PATH,
-        check_same_thread=False
-    )
-    conexao.row_factory = sqlite3.Row
-    conexao.execute("PRAGMA foreign_keys = ON")
-    return conexao
+from app.models.registros import Reserva, Pagamento, Adicional, Bloqueio
 
 TIPOS_QUARTO = {
     "Simples": Simples,
@@ -70,7 +56,8 @@ class Repositorio:
                     capacidade INTEGER NOT NULL CHECK (capacidade > 0),
                     diaria REAL NOT NULL CHECK (diaria > 0),
                     status TEXT NOT NULL DEFAULT 'disponivel',
-                    observacoes TEXT NOT NULL DEFAULT ''
+                    observacoes TEXT NOT NULL DEFAULT '',
+                    diferencial TEXT NOT NULL DEFAULT ''
                 );
 
                 CREATE TABLE IF NOT EXISTS hospedes (
@@ -124,11 +111,47 @@ class Repositorio:
                     data_lancamento TEXT NOT NULL,
                     FOREIGN KEY (reserva_id) REFERENCES reservas(id) ON DELETE CASCADE
                 );
+
+                CREATE TABLE IF NOT EXISTS bloqueios (
+                    id TEXT PRIMARY KEY,
+                    quarto_numero TEXT NOT NULL,
+                    data_bloqueio TEXT NOT NULL,
+                    tipo TEXT NOT NULL DEFAULT 'bloqueio',
+                    status TEXT NOT NULL,
+                    FOREIGN KEY (quarto_numero) REFERENCES quartos(numero)
+                );
+
+                CREATE TABLE IF NOT EXISTS rastreabilidade (
+                    registro_id TEXT NOT NULL,
+                    tipo_registro TEXT NOT NULL,
+                    criado_em TEXT NOT NULL,
+                    editado_em TEXT,
+                    criado_por TEXT NOT NULL,
+                    editado_por TEXT,
+                    PRIMARY KEY (registro_id, tipo_registro)
+                );
+
+                CREATE TABLE IF NOT EXISTS historico_rastreabilidade (
+                    evento_id TEXT PRIMARY KEY,
+                    registro_id TEXT NOT NULL,
+                    tipo_registro TEXT NOT NULL,
+                    acao TEXT NOT NULL,
+                    data_evento TEXT NOT NULL,
+                    responsavel TEXT NOT NULL,
+                    descricao TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY (registro_id, tipo_registro)
+                        REFERENCES rastreabilidade(registro_id, tipo_registro)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_historico_registro
+                    ON historico_rastreabilidade (registro_id, tipo_registro, data_evento);
                 """
             )
             # Migração simples para bancos criados por versões anteriores.
             self._adicionar_coluna_se_ausente("quartos", "tipo", "TEXT NOT NULL DEFAULT 'Simples'")
             self._adicionar_coluna_se_ausente("quartos", "observacoes", "TEXT NOT NULL DEFAULT ''")
+            self._adicionar_coluna_se_ausente("quartos", "diferencial", "TEXT NOT NULL DEFAULT ''")
             self._adicionar_coluna_se_ausente("hospedes", "documento", "TEXT NOT NULL DEFAULT ''")
             self._adicionar_coluna_se_ausente("hospedes", "email", "TEXT NOT NULL DEFAULT ''")
             self._adicionar_coluna_se_ausente("hospedes", "telefone", "TEXT NOT NULL DEFAULT ''")
@@ -170,19 +193,101 @@ class Repositorio:
             return valor
         return date.fromisoformat(str(valor))
 
+    def _salvar_rastreabilidade_no_contexto(self, objeto, tipo_registro: str) -> None:
+        """Salva metadados e eventos sem duplicar eventos já gravados."""
+        if not hasattr(objeto, "historico"):
+            return
+
+        self.conn.execute(
+            """
+            INSERT INTO rastreabilidade
+                (registro_id, tipo_registro, criado_em, editado_em, criado_por, editado_por)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(registro_id, tipo_registro) DO UPDATE SET
+                criado_em=excluded.criado_em,
+                editado_em=excluded.editado_em,
+                criado_por=excluded.criado_por,
+                editado_por=excluded.editado_por
+            """,
+            (
+                str(objeto.id), tipo_registro,
+                self._data(objeto.criado_em).isoformat(),
+                self._data(objeto.editado_em).isoformat() if objeto.editado_em else None,
+                objeto.criado_por, objeto.editado_por,
+            ),
+        )
+
+        for evento in objeto.historico:
+            evento_id = evento.get("id")
+            if not evento_id:
+                # Compatibilidade com objetos de rastreabilidade criados antes desta versão.
+                from uuid import uuid4
+                evento_id = str(uuid4())
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO historico_rastreabilidade
+                    (evento_id, registro_id, tipo_registro, acao, data_evento, responsavel, descricao)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evento_id, str(objeto.id), tipo_registro,
+                    evento["acao"], self._data(evento["data"]).isoformat(),
+                    evento["responsavel"], evento.get("descricao", ""),
+                ),
+            )
+
+    def _carregar_rastreabilidade(self, objeto, tipo_registro: str):
+        """Reidrata o histórico de auditoria de um objeto carregado do banco."""
+        if not hasattr(objeto, "carregar_rastreabilidade"):
+            return objeto
+
+        metadados = self.conn.execute(
+            """SELECT * FROM rastreabilidade
+               WHERE registro_id = ? AND tipo_registro = ?""",
+            (str(objeto.id), tipo_registro),
+        ).fetchone()
+        if not metadados:
+            return objeto
+
+        linhas = self.conn.execute(
+            """SELECT * FROM historico_rastreabilidade
+               WHERE registro_id = ? AND tipo_registro = ?
+               ORDER BY data_evento, rowid""",
+            (str(objeto.id), tipo_registro),
+        ).fetchall()
+        historico = [
+            {
+                "id": linha["evento_id"],
+                "acao": linha["acao"],
+                "data": self._data(linha["data_evento"]),
+                "responsavel": linha["responsavel"],
+                "descricao": linha["descricao"],
+            }
+            for linha in linhas
+        ]
+        objeto.carregar_rastreabilidade(
+            criado_em=self._data(metadados["criado_em"]),
+            editado_em=self._data(metadados["editado_em"]) if metadados["editado_em"] else None,
+            criado_por=metadados["criado_por"],
+            editado_por=metadados["editado_por"],
+            historico=historico,
+        )
+        return objeto
+
     # ------------------------------ quartos ------------------------------
     def salvar_quarto(self, quarto) -> None:
         with self._lock, self.conn:
             self.conn.execute(
                 """
-                INSERT INTO quartos (numero, tipo, capacidade, diaria, status, observacoes)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO quartos (numero, tipo, capacidade, diaria, status, observacoes, diferencial)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(numero) DO UPDATE SET
                     tipo=excluded.tipo,
                     capacidade=excluded.capacidade,
                     diaria=excluded.diaria,
                     status=excluded.status,
-                    observacoes=excluded.observacoes
+                    observacoes=excluded.observacoes,
+                    diferencial=excluded.diferencial
                 """,
                 (
                     str(quarto.numero),
@@ -191,6 +296,7 @@ class Repositorio:
                     quarto.diaria,
                     quarto.status,
                     getattr(quarto, "observacoes", ""),
+                    getattr(quarto, "diferencial", ""),
                 ),
             )
 
@@ -208,16 +314,20 @@ class Repositorio:
             ).fetchall()
             return [self._quarto_de_linha(linha) for linha in linhas]
 
-    @staticmethod
-    def _quarto_de_linha(linha):
+    def _quarto_de_linha(self, linha):
         classe = TIPOS_QUARTO.get(linha["tipo"], Simples)
-        return classe(
+        quarto = classe(
             numero=linha["numero"],
             capacidade=linha["capacidade"],
             diaria=linha["diaria"],
             status=linha["status"],
             observacoes=linha["observacoes"],
+            diferencial=linha["diferencial"],
         )
+        # Os bloqueios são registros próprios no SQLite; a lista do quarto
+        # representa a associação carregada, sem duplicar os dados no cadastro.
+        quarto.bloqueios = self.listar_bloqueios(quarto_numero=quarto.numero)
+        return quarto
 
     # ------------------------------ hóspedes -----------------------------
     def salvar_hospede(self, hospede) -> None:
@@ -327,6 +437,10 @@ class Repositorio:
             for adicional in getattr(reserva, "adicionais", []):
                 self._salvar_adicional_no_contexto(reserva.id, adicional)
 
+            self._salvar_rastreabilidade_no_contexto(reserva, "Reserva")
+            for pagamento in getattr(reserva, "pagamentos", []):
+                self._salvar_rastreabilidade_no_contexto(pagamento, "Pagamento")
+
     def obter_reserva(self, reserva_id: str):
         with self._lock:
             linha = self.conn.execute(
@@ -382,7 +496,58 @@ class Repositorio:
         # O modelo atual pode ainda não declarar hospedes_ids; a API precisa
         # desse atributo para representar reservas com vários hóspedes.
         reserva.hospedes_ids = hospedes_ids
+        self._carregar_rastreabilidade(reserva, "Reserva")
+        for pagamento in pagamentos:
+            self._carregar_rastreabilidade(pagamento, "Pagamento")
         return reserva
+
+    # ------------------------------ bloqueios -----------------------------
+    def salvar_bloqueio(self, bloqueio) -> None:
+        with self._lock, self.conn:
+            self.conn.execute(
+                """INSERT INTO bloqueios (id, quarto_numero, data_bloqueio, tipo, status)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       quarto_numero=excluded.quarto_numero,
+                       data_bloqueio=excluded.data_bloqueio,
+                       tipo=excluded.tipo,
+                       status=excluded.status""",
+                (
+                    bloqueio.id, bloqueio.quarto_relacionado,
+                    self._data(bloqueio.data).isoformat(),
+                    getattr(bloqueio, "tipo", "bloqueio"), bloqueio.status,
+                ),
+            )
+            self._salvar_rastreabilidade_no_contexto(bloqueio, "Bloqueio")
+
+    def obter_bloqueio(self, bloqueio_id: str):
+        with self._lock:
+            linha = self.conn.execute(
+                "SELECT * FROM bloqueios WHERE id = ?", (str(bloqueio_id),)
+            ).fetchone()
+            if not linha:
+                return None
+            bloqueio = Bloqueio(
+                id=linha["id"],
+                quarto_relacionado=linha["quarto_numero"],
+                data=self._data(linha["data_bloqueio"]),
+                tipo=linha["tipo"],
+                status=linha["status"],
+            )
+            return self._carregar_rastreabilidade(bloqueio, "Bloqueio")
+
+    def listar_bloqueios(self, quarto_numero: str | None = None) -> list:
+        with self._lock:
+            if quarto_numero is None:
+                linhas = self.conn.execute(
+                    "SELECT id FROM bloqueios ORDER BY data_bloqueio, id"
+                ).fetchall()
+            else:
+                linhas = self.conn.execute(
+                    "SELECT id FROM bloqueios WHERE quarto_numero = ? ORDER BY data_bloqueio, id",
+                    (str(quarto_numero),),
+                ).fetchall()
+            return [self.obter_bloqueio(linha["id"]) for linha in linhas]
 
     # ------------------------- pagamentos/adicionais ----------------------
     def _salvar_pagamento_no_contexto(self, reserva_id: str, pagamento) -> None:
@@ -401,6 +566,7 @@ class Repositorio:
                 forma,
             ),
         )
+        self._salvar_rastreabilidade_no_contexto(pagamento, "Pagamento")
 
     def _salvar_adicional_no_contexto(self, reserva_id: str, adicional) -> None:
         self.conn.execute(

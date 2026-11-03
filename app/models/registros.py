@@ -1,8 +1,11 @@
 from datetime import date
 from app.models.quartos import Quarto
+from app.models.rastreios import Rastreabilidade
+
 
 # ==================================================== Super Classe Registro ====================================================
-class Registro: # Concentra os dados comuns a todos os registros. Como id, origem, data e etc.
+
+class Registro:  # Concentra os dados comuns a todos os registros. Como id, origem, data e etc.
 
     TIPOS_VALIDOS = ("reserva", "bloqueio")
     STATUS_VALIDOS = ("ativo", "cancelado", "finalizado")
@@ -17,8 +20,9 @@ class Registro: # Concentra os dados comuns a todos os registros. Como id, orige
     ):
         if type(self) is Registro:
             raise TypeError(
-                "Registro é abstrata e não pode ser instanciada diretamente.\nUse Reserva ou Bloqueio."
-                )
+                "Registro é abstrata e não pode ser instanciada diretamente.\n"
+                "Use Reserva ou Bloqueio."
+            )
 
         self.id = id
         self.quarto_relacionado = quarto_relacionado
@@ -26,7 +30,7 @@ class Registro: # Concentra os dados comuns a todos os registros. Como id, orige
         self.tipo = tipo
         self.status = status
 
-     # ================= id =====================
+    # ================= id =====================
 
     @property
     def id(self):
@@ -35,9 +39,7 @@ class Registro: # Concentra os dados comuns a todos os registros. Como id, orige
     @id.setter
     def id(self, valor: str):
         if not valor or not str(valor).strip():
-            raise ValueError(
-                "id não pode ser vazio"
-                )
+            raise ValueError("id não pode ser vazio")
 
         self.__id = str(valor).strip()
 
@@ -50,9 +52,7 @@ class Registro: # Concentra os dados comuns a todos os registros. Como id, orige
     @quarto_relacionado.setter
     def quarto_relacionado(self, valor: str):
         if not valor or not str(valor).strip():
-            raise ValueError(
-                "Quarto relacionado não pode ser vazio"
-            )
+            raise ValueError("Quarto relacionado não pode ser vazio")
 
         self.__quarto_relacionado = str(valor).strip()
 
@@ -65,9 +65,7 @@ class Registro: # Concentra os dados comuns a todos os registros. Como id, orige
     @data.setter
     def data(self, valor: date):
         if not isinstance(valor, date):
-            raise ValueError(
-                "Data deve ser um objeto do tipo date"
-            )
+            raise ValueError("Data deve ser um objeto do tipo date")
 
         self.__data = valor
 
@@ -80,9 +78,7 @@ class Registro: # Concentra os dados comuns a todos os registros. Como id, orige
     @tipo.setter
     def tipo(self, valor: str):
         if not valor or not str(valor).strip():
-            raise ValueError(
-                "Tipo não pode ser vazio"
-            )
+            raise ValueError("Tipo não pode ser vazio")
 
         self.__tipo = str(valor).strip()
 
@@ -103,7 +99,9 @@ class Registro: # Concentra os dados comuns a todos os registros. Como id, orige
 
     def __str__(self):
         return (
-            f"Registro: {self.id}\nQuarto: {self.quarto_relacionado} \n{self.status}"
+            f"Registro: {self.id}\n"
+            f"Quarto: {self.quarto_relacionado} \n"
+            f"{self.status}"
         )
 
     def __repr__(self):
@@ -125,11 +123,13 @@ class Registro: # Concentra os dados comuns a todos os registros. Como id, orige
     def __hash__(self):
         return hash(self.id)
 
-# =================================================================== subclasse Reserva =================================================================
-class Reserva(Registro): # A classe central do sistema deve herdar atributos de registro e rastreabilidade. Contém data de entrada, saida, quarto reservado e etc.
-                 # Por enquanto, vamos irei fazer sem herdar a rastreabilidade.
 
-    def __init__( # Parâmetros da reserva
+# =================================================================== subclasse Reserva =================================================================
+
+class Reserva(Registro, Rastreabilidade):
+    # A classe central do sistema herda os atributos de Registro e Rastreabilidade.
+
+    def __init__(
         self,
         id: str,
         quarto_relacionado: str,
@@ -144,13 +144,16 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
         hospede_id: str | None = None,
         hospedes_ids: list | None = None,
     ):
-        super().__init__( # Chama o construtor da classe pai Registro
+        super().__init__(
             id,
             quarto_relacionado,
             data,
             tipo,
             status
         )
+
+        # Inicialização explícita porque Registro não herda de Rastreabilidade.
+        Rastreabilidade.__init__(self)
 
         self.data_entrada = data_entrada
         self.data_saida = data_saida
@@ -177,7 +180,7 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
 
         self.__data_entrada = valor
 
-     # ========== data saída ==========
+    # ========== data saída ==========
 
     @property
     def data_saida(self):
@@ -208,13 +211,18 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
     def hospedes_ids(self, valores: list):
         if not isinstance(valores, list):
             raise ValueError("IDs dos hóspedes devem estar em uma lista")
+
         ids = []
+
         for valor in valores:
             if valor is None or not str(valor).strip():
                 raise ValueError("ID do hóspede não pode ser vazio")
+
             ids.append(str(valor).strip())
+
         if len(ids) != len(set(ids)):
             raise ValueError("Não é permitido repetir hóspedes na reserva")
+
         self.__hospedes_ids = ids
         self.__hospede_id = ids[0] if ids else None
 
@@ -226,22 +234,33 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
     def hospede_id(self, valor: str | None):
         if valor is None:
             self.__hospede_id = None
+
             if hasattr(self, "_Reserva__hospedes_ids"):
                 self.__hospedes_ids = []
+
             return
+
         if not str(valor).strip():
             raise ValueError("ID do hóspede não pode ser vazio")
+
         valor = str(valor).strip()
         self.__hospede_id = valor
-        if hasattr(self, "_Reserva__hospedes_ids") and valor not in self.__hospedes_ids:
+
+        if (
+            hasattr(self, "_Reserva__hospedes_ids")
+            and valor not in self.__hospedes_ids
+        ):
             self.__hospedes_ids.insert(0, valor)
 
     def vincular_hospede(self, hospede_id: str):
         if not hospede_id or not str(hospede_id).strip():
             raise ValueError("ID do hóspede não pode ser vazio")
+
         hospede_id = str(hospede_id).strip()
+
         if hospede_id in self.hospedes_ids:
             raise ValueError("Hóspede já está vinculado à reserva")
+
         self.hospedes_ids = self.hospedes_ids + [hospede_id]
 
     # ========== quantidade de hóspedes ==========
@@ -282,7 +301,6 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
 
         self.__adicionais = valor
 
-
     # ========== pagamentos ==========
 
     @property
@@ -303,20 +321,44 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
 
     # ========== métodos da reserva ==========
 
-    def confirmar(self):
+    def confirmar(self, responsavel: str = "sistema"):
         self.status = "Confirmada"
+
+        self.rastrearEdicao(
+            responsavel,
+            "Reserva confirmada."
+        )
+
         return f"Reserva {self.id} confirmada."
 
-    def cancelarReserva(self) -> str:
+    def cancelarReserva(self, responsavel: str = "sistema") -> str:
         self.status = "Cancelada"
+
+        self.rastrearEdicao(
+            responsavel,
+            "Reserva cancelada."
+        )
+
         return f"Reserva {self.id} cancelada."
 
-    def checkIn(self):
+    def checkIn(self, responsavel: str = "sistema"):
         self.status = "Hospedado"
+
+        self.rastrearEdicao(
+            responsavel,
+            "Check-in realizado."
+        )
+
         return f"Check-in da reserva {self.id} realizado."
 
-    def checkOut(self):
+    def checkOut(self, responsavel: str = "sistema"):
         self.status = "Finalizada"
+
+        self.rastrearEdicao(
+            responsavel,
+            "Check-out realizado."
+        )
+
         return f"Check-out da reserva {self.id} realizado."
 
     def total_pago(self) -> float:
@@ -336,26 +378,39 @@ class Reserva(Registro): # A classe central do sistema deve herdar atributos de 
 
         return max(0.0, total - self.total_pago())
 
-
     # ========== método especial ==========
 
     def __len__(self):
         return (self.data_saida - self.data_entrada).days
 
-# ============================================================== composições e subclasses =================================================================
-  
-class Pagamento:
 
+# ============================================================== composições e subclasses =================================================================
+
+class Pagamento(Rastreabilidade):
     # Pagamento realizado para uma reserva.
 
-    def __init__(self, *args, id=None, valor=None, data=None, metodo=None, reserva_id=None, forma=None):
+    def __init__(
+        self,
+        *args,
+        id=None,
+        valor=None,
+        data=None,
+        metodo=None,
+        reserva_id=None,
+        forma=None
+    ):
         # Aceita a assinatura do modelo (id, valor, data, metodo) e
         # a assinatura histórica do serviço/testes (id, reserva_id, forma, valor[, data]).
         if args:
-            if len(args) in (4, 5) and isinstance(args[1], str) and isinstance(args[2], str):
+            if (
+                len(args) in (4, 5)
+                and isinstance(args[1], str)
+                and isinstance(args[2], str)
+            ):
                 id, reserva_id, forma, valor = args[:4]
                 data = args[4] if len(args) == 5 else (data or date.today())
                 metodo = forma
+
             elif len(args) >= 1:
                 nomes = ("id", "valor", "data", "metodo")
                 valores = dict(zip(nomes, args))
@@ -363,13 +418,17 @@ class Pagamento:
                 valor = valores.get("valor", valor)
                 data = valores.get("data", data)
                 metodo = valores.get("metodo", metodo)
+
         if forma is not None:
             metodo = forma
+
         self.id = id
         self.valor = valor
         self.data = data or date.today()
         self.metodo = metodo
         self.reserva_id = reserva_id
+
+        Rastreabilidade.__init__(self)
 
     @property
     def id(self):
@@ -379,6 +438,7 @@ class Pagamento:
     def id(self, valor: str):
         if not valor or not str(valor).strip():
             raise ValueError("ID do pagamento não pode ser vazio")
+
         self.__id = str(valor).strip()
 
     @property
@@ -405,6 +465,7 @@ class Pagamento:
     def data(self, valor: date):
         if not isinstance(valor, date):
             raise ValueError("Data do pagamento deve ser do tipo date")
+
         self.__data = valor
 
     @property
@@ -415,15 +476,24 @@ class Pagamento:
     def metodo(self, valor: str):
         if not valor or not str(valor).strip():
             raise ValueError("Método de pagamento não pode ser vazio")
+
         metodo = str(valor).strip()
-        normalizado = metodo.lower().replace("á", "a").replace("ã", "a").replace("é", "e")
+        normalizado = (
+            metodo.lower()
+            .replace("á", "a")
+            .replace("ã", "a")
+            .replace("é", "e")
+        )
+
         formas_validas = {
             "pix", "cartao", "cartao_credito", "cartao_debito",
             "credito", "debito", "dinheiro", "transferencia", "ted", "doc",
             "cartão", "cartão de crédito", "cartão de débito",
         }
+
         if normalizado not in formas_validas:
             raise ValueError(f"Método de pagamento inválido: {metodo!r}")
+
         self.__metodo = metodo
 
     @property
@@ -436,15 +506,27 @@ class Pagamento:
 
 
 class Adicional:
-
     # Item ou serviço extra cobrado em uma reserva.
 
-    def __init__(self, *args, id=None, descricao=None, valor=None, data=None, reserva_id=None):
+    def __init__(
+        self,
+        *args,
+        id=None,
+        descricao=None,
+        valor=None,
+        data=None,
+        reserva_id=None
+    ):
         # Aceita (id, descricao, valor, data) e (id, reserva_id, descricao, valor).
         if args:
-            if len(args) in (4, 5) and isinstance(args[1], str) and isinstance(args[2], str):
+            if (
+                len(args) in (4, 5)
+                and isinstance(args[1], str)
+                and isinstance(args[2], str)
+            ):
                 id, reserva_id, descricao, valor = args[:4]
                 data = args[4] if len(args) == 5 else (data or date.today())
+
             else:
                 nomes = ("id", "descricao", "valor", "data")
                 valores = dict(zip(nomes, args))
@@ -452,6 +534,7 @@ class Adicional:
                 descricao = valores.get("descricao", descricao)
                 valor = valores.get("valor", valor)
                 data = valores.get("data", data)
+
         self.id = id
         self.descricao = descricao
         self.valor = valor
@@ -466,6 +549,7 @@ class Adicional:
     def id(self, valor: str):
         if not valor or not str(valor).strip():
             raise ValueError("ID do adicional não pode ser vazio")
+
         self.__id = str(valor).strip()
 
     @property
@@ -476,6 +560,7 @@ class Adicional:
     def descricao(self, valor: str):
         if not valor or not str(valor).strip():
             raise ValueError("Descrição do adicional não pode ser vazia")
+
         self.__descricao = str(valor).strip()
 
     @property
@@ -502,11 +587,43 @@ class Adicional:
     def data(self, valor: date):
         if not isinstance(valor, date):
             raise ValueError("Data do adicional deve ser do tipo date")
-        self.__data = valor
-class Bloqueio():
 
+        self.__data = valor
+
+
+# ==================================================== Subclasse Bloqueio ====================================================
+
+class Bloqueio(Registro, Rastreabilidade):
     # Indisponibilização temporária de um quarto.
 
-    pass
+    def __init__(
+        self,
+        id: str,
+        quarto_relacionado: str,
+        data: date,
+        tipo: str,
+        status: str,
+        criado_por: str = "sistema"
+    ):
+        super().__init__(
+            id,
+            quarto_relacionado,
+            data,
+            tipo,
+            status
+        )
 
-# Definitivamente, tenho que modularizar isso
+        Rastreabilidade.__init__(self, criado_por)
+
+    def cancelar(self, responsavel: str = "sistema"):
+        self.status = "cancelado"
+
+        self.rastrearEdicao(
+            responsavel,
+            "Bloqueio cancelado."
+        )
+
+        return f"Bloqueio {self.id} cancelado."
+
+
+# Definitivamente, era bom modularizar isso.
