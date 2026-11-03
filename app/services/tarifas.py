@@ -1,29 +1,32 @@
 from datetime import date, timedelta
 
+from app.config import carregar_configuracoes
+
 # ==================================================== Serviço de Tarifa ====================================================
 class Tarifa:
     """Calcula o valor da diária de um quarto.
 
     Regras (acumulativas, aplicadas sobre a diária base):
     - fim de semana (pernoites de sexta e sábado): +30% por padrão;
-    - temporada alta (dez, jan, fev e jul): +50% por padrão;
+    - temporadas: multiplicadores e intervalos lidos de settings.json;
     - desconto: aplicado sobre o TOTAL da estadia (aplicar_desconto).
     """
 
-    MESES_TEMPORADA_ALTA = (12, 1, 2, 7)          # férias de verão + julho
-    DIAS_FIM_DE_SEMANA = (4, 5)                   # weekday(): 4 = sexta, 5 = sábado (noites de fds)
-
-    ACRESCIMO_FDS_PADRAO = 0.30
-    ACRESCIMO_TEMPORADA_PADRAO = 0.50
+    DIAS_FIM_DE_SEMANA = (4, 5)  # noites de sexta e sábado
 
     def __init__(
         self,
         diaria_base: float,
-        acrescimo_fds: float = ACRESCIMO_FDS_PADRAO,
-        acrescimo_temporada: float = ACRESCIMO_TEMPORADA_PADRAO
+        acrescimo_fds: float | None = None,
+        acrescimo_temporada: float | None = None,
+        configuracoes: dict | None = None,
     ):
+        self.configuracoes = configuracoes or carregar_configuracoes()
         self.diaria_base = diaria_base
-        self.acrescimo_fds = acrescimo_fds
+        self.acrescimo_fds = (
+            float(self.configuracoes["tarifas"]["multiplicador_fim_semana"]) - 1
+            if acrescimo_fds is None else acrescimo_fds
+        )
         self.acrescimo_temporada = acrescimo_temporada
 
     # ========== diária base ==========
@@ -49,12 +52,15 @@ class Tarifa:
 
     # ========== acréscimo temporada ==========
     @property
-    def acrescimo_temporada(self) -> float:
+    def acrescimo_temporada(self) -> float | None:
         return self.__acrescimo_temporada
 
     @acrescimo_temporada.setter
-    def acrescimo_temporada(self, valor: float) -> None:
-        self.__acrescimo_temporada = self.__valida_percentual(valor, "acréscimo de temporada")
+    def acrescimo_temporada(self, valor: float | None) -> None:
+        self.__acrescimo_temporada = (
+            None if valor is None
+            else self.__valida_percentual(valor, "acréscimo de temporada")
+        )
 
     @staticmethod
     def __valida_percentual(valor: float, nome: str) -> float:
@@ -68,9 +74,18 @@ class Tarifa:
         """Sexta e sábado são noites de fim de semana."""
         return data.weekday() in self.DIAS_FIM_DE_SEMANA
 
+    def temporada_da_data(self, data: date) -> dict | None:
+        """Retorna a temporada configurada que contém a data, se houver."""
+        for temporada in self.configuracoes["tarifas"].get("temporadas", []):
+            inicio = date.fromisoformat(temporada["inicio"])
+            fim = date.fromisoformat(temporada["fim"])
+            if inicio <= data <= fim:
+                return temporada
+        return None
+
     def eh_temporada_alta(self, data: date) -> bool:
-        """Dezembro, janeiro, fevereiro e julho são temporada alta."""
-        return data.month in self.MESES_TEMPORADA_ALTA
+        """Indica se a data pertence a uma temporada configurada."""
+        return self.temporada_da_data(data) is not None
 
     # ========== cálculos ==========
     def calcular_diaria(self, data: date) -> float:
@@ -83,8 +98,14 @@ class Tarifa:
         if self.eh_fim_de_semana(data):
             valor *= 1 + self.acrescimo_fds
 
-        if self.eh_temporada_alta(data):
-            valor *= 1 + self.acrescimo_temporada
+        temporada = self.temporada_da_data(data)
+        if temporada is not None:
+            multiplicador = (
+                1 + self.acrescimo_temporada
+                if self.acrescimo_temporada is not None
+                else float(temporada["multiplicador"])
+            )
+            valor *= multiplicador
 
         return valor
 

@@ -1,1 +1,0 @@
-# Rota para gerenciar reservas na API

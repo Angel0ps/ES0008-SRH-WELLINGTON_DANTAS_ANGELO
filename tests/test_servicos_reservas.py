@@ -30,9 +30,12 @@ def servico(repo):
 
 def _criar(servico, id="r1", quarto="101", entrada=date(2026, 12, 10),
            saida=date(2026, 12, 12), hospedes=("h1",), qtd=1):
-    return servico.criar_reserva(
+    reserva = servico.criar_reserva(
         id=id, numero_quarto=quarto, data_entrada=entrada, data_saida=saida,
-        hospedes_ids=list(hospedes), qtd_hospedes=qtd)
+        hospedes_ids=list(hospedes), qtd_hospedes=qtd,
+        status_inicial="Pendente",
+    )
+    return servico.confirmar(reserva.id)
 
 
 # ==================== criação ====================
@@ -144,9 +147,12 @@ def test_check_in_duplo_e_barrado(servico):
 
 
 def test_check_out_libera_o_quarto(servico, repo):
+    from datetime import datetime
     _criar(servico, entrada=date(2026, 12, 10), saida=date(2026, 12, 12))
     servico.check_in("r1", hoje=date(2026, 12, 10))
-    r = servico.check_out("r1")
+    valor = servico.calcular_valor_reserva(repo.obter_reserva("r1"))
+    servico.lancar_pagamento("r1", "p-checkout", "pix", valor, date(2026, 12, 12))
+    r = servico.check_out("r1", datetime(2026, 12, 12, 12, 0))
     assert r.status == "Finalizada"
     assert repo.obter_quarto("101").status == "disponivel"
 
@@ -223,3 +229,79 @@ def test_lancar_pagamento_e_adicional_atualiza_totais(servico):
     assert r.total_pago() == pytest.approx(150.0)
     assert r.total_adicionais() == pytest.approx(30.0)
     assert r.total_devido(200.0) == pytest.approx(80.0)  # 200 + 30 - 150
+
+def test_reserva_pendente_pode_ser_confirmada(servico, repo):
+    reserva = servico.criar_reserva(
+        id="pendente", numero_quarto="101", data_entrada=date(2026, 12, 10),
+        data_saida=date(2026, 12, 12), hospedes_ids=["h1"], qtd_hospedes=1,
+        status_inicial="Pendente",
+    )
+    assert reserva.status == "Pendente"
+    confirmada = servico.confirmar("pendente")
+    assert confirmada.status == "Confirmada"
+
+
+def test_reserva_pendente_pode_ser_cancelada_sem_multa(servico):
+    servico.criar_reserva(
+        id="pendente", numero_quarto="101", data_entrada=date(2026, 12, 10),
+        data_saida=date(2026, 12, 12), hospedes_ids=["h1"], qtd_hospedes=1,
+        status_inicial="Pendente",
+    )
+    assert servico.cancelar("pendente", hoje=date(2026, 12, 9)) == 0.0
+
+
+def test_checkin_exige_horario_configurado(servico):
+    _criar(servico)
+    from datetime import datetime
+    with pytest.raises(ValueError, match="Check-in permitido a partir"):
+        servico.check_in("r1", hoje=datetime(2026, 12, 10, 13, 0))
+    assert servico.check_in("r1", hoje=datetime(2026, 12, 10, 13, 30)).status == "Hospedado"
+
+
+def test_checkout_bloqueia_pagamento_insuficiente(servico):
+    _criar(servico)
+    servico.check_in("r1", hoje=date(2026, 12, 10))
+    servico.lancar_pagamento("r1", "p1", "pix", 100.0, date(2026, 12, 12))
+    from datetime import datetime
+    with pytest.raises(ValueError, match="Pagamento insuficiente"):
+        servico.check_out("r1", datetime(2026, 12, 12, 12, 0))
+
+
+def test_checkout_atrasado_lanca_diaria_extra(servico, repo):
+    from datetime import datetime
+    _criar(servico)
+    servico.check_in("r1", hoje=date(2026, 12, 10))
+    reserva = repo.obter_reserva("r1")
+    valor = servico.calcular_valor_reserva(reserva)
+    diaria_extra = servico._diaria_do_quarto_na_data(reserva, date(2026, 12, 12))
+    servico.lancar_pagamento("r1", "p1", "pix", valor + diaria_extra, date(2026, 12, 12))
+    finalizada = servico.check_out("r1", datetime(2026, 12, 12, 13, 0))
+    assert finalizada.status == "Finalizada"
+    assert finalizada.total_adicionais() == pytest.approx(diaria_extra)
+
+
+def test_no_show_respeita_tolerancia_de_horario(servico):
+    from datetime import datetime
+    _criar(servico)
+    with pytest.raises(ValueError, match="tolerância"):
+        servico.no_show("r1", datetime(2026, 12, 11, 0, 30))
+    assert servico.no_show("r1", datetime(2026, 12, 11, 1, 0)) == pytest.approx(100.0)
+
+
+def test_politica_cancelamento_respeita_limite_exato_de_48_horas(servico):
+    from datetime import datetime
+    _criar(servico, entrada=date(2026, 12, 10), saida=date(2026, 12, 12))
+    # Entrada às 14h: exatamente 48h antes é gratuito.
+    assert servico.cancelar("r1", datetime(2026, 12, 8, 14, 0)) == 0.0
+
+
+def test_politica_cancelamento_cobra_abaixo_de_48_horas(servico):
+    from datetime import datetime
+    _criar(servico, entrada=date(2026, 12, 10), saida=date(2026, 12, 12))
+    assert servico.cancelar("r1", datetime(2026, 12, 8, 14, 1)) == pytest.approx(100.0)
+
+
+def test_checkin_em_dia_posterior_e_rejeitado(servico):
+    _criar(servico)
+    with pytest.raises(ValueError, match="data prevista"):
+        servico.check_in("r1", hoje=date(2026, 12, 11))
