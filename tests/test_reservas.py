@@ -86,3 +86,26 @@ def test_pagamento_e_adicional_valores_devem_ser_positivos():
         Pagamento("p1", "r1", "pix", 0)
     with pytest.raises(ValueError):
         Adicional("a1", "r1", "Frigobar", -10)
+
+def test_reserva_igual_quando_quarto_e_intervalo_sao_iguais():
+    primeira = _reserva("r1")
+    segunda = _reserva("r2")
+    assert primeira == segunda
+    assert hash(primeira) == hash(segunda)
+
+
+def test_reserva_diferente_quando_quarto_ou_intervalo_muda():
+    primeira = _reserva("r1")
+    outra = Reserva(
+        id="r2", quarto_relacionado="102", data=date(2026, 10, 1),
+        tipo="reserva", status="Confirmada", data_entrada=date(2026, 12, 10),
+        data_saida=date(2026, 12, 14), qtd_hospedes=2, hospedes_ids=["h1", "h2"],
+    )
+    assert primeira != outra
+
+
+def test_reserva_implementa_heranca_multipla_com_rastreabilidade():
+    from app.models.rastreios import Rastreabilidade
+    reserva = _reserva()
+    assert isinstance(reserva, Registro)
+    assert isinstance(reserva, Rastreabilidade)

@@ -79,6 +79,7 @@ class Repositorio:
                     qtd_hospedes INTEGER NOT NULL CHECK (qtd_hospedes > 0),
                     status TEXT NOT NULL,
                     tipo TEXT NOT NULL DEFAULT 'reserva',
+                    origem TEXT NOT NULL DEFAULT 'balcao',
                     hospede_id TEXT,
                     FOREIGN KEY (quarto_numero) REFERENCES quartos(numero),
                     FOREIGN KEY (hospede_id) REFERENCES hospedes(id),
@@ -189,6 +190,7 @@ class Repositorio:
             self._adicionar_coluna_se_ausente("hospedes", "acessibilidade", "INTEGER NOT NULL DEFAULT 0")
             self._adicionar_coluna_se_ausente("reservas", "tipo", "TEXT NOT NULL DEFAULT 'reserva'")
             self._adicionar_coluna_se_ausente("reservas", "hospede_id", "TEXT")
+            self._adicionar_coluna_se_ausente("reservas", "origem", "TEXT NOT NULL DEFAULT 'balcao'")
             self._adicionar_coluna_se_ausente("pagamentos", "forma", "TEXT NOT NULL DEFAULT 'Não informado'")
             self._adicionar_coluna_se_ausente("pagamentos", "metodo", "TEXT NOT NULL DEFAULT 'Não informado'")
             self._adicionar_coluna_se_ausente(
@@ -422,6 +424,27 @@ class Repositorio:
             acessibilidade=bool(linha["acessibilidade"]),
         )
 
+    def excluir_quarto(self, numero: str) -> bool:
+        with self._lock, self.conn:
+            cursor = self.conn.execute("DELETE FROM quartos WHERE numero = ?", (str(numero),))
+            return cursor.rowcount > 0
+
+    def excluir_hospede(self, hospede_id: str) -> bool:
+        with self._lock, self.conn:
+            cursor = self.conn.execute("DELETE FROM hospedes WHERE id = ?", (str(hospede_id),))
+            return cursor.rowcount > 0
+
+    def reservas_do_hospede(self, hospede_id: str) -> list:
+        """Retorna o histórico de reservas vinculadas ao hóspede."""
+        with self._lock:
+            linhas = self.conn.execute(
+                """SELECT r.* FROM reservas r
+                   JOIN reserva_hospedes rh ON rh.reserva_id = r.id
+                   WHERE rh.hospede_id = ? ORDER BY r.data_entrada DESC, r.id""",
+                (str(hospede_id),),
+            ).fetchall()
+            return [self._reserva_de_linha(linha) for linha in linhas]
+
     # ---------------------------- funcionários ---------------------------
     def salvar_funcionario(self, funcionario) -> None:
         with self._lock, self.conn:
@@ -469,8 +492,8 @@ class Repositorio:
                 """
                 INSERT INTO reservas
                     (id, quarto_numero, data_reserva, data_entrada, data_saida,
-                     qtd_hospedes, status, tipo, hospede_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     qtd_hospedes, status, tipo, origem, hospede_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     quarto_numero=excluded.quarto_numero,
                     data_reserva=excluded.data_reserva,
@@ -490,6 +513,7 @@ class Repositorio:
                     reserva.qtd_hospedes,
                     reserva.status,
                     getattr(reserva, "tipo", "reserva"),
+                    getattr(reserva, "origem", "balcao"),
                     hospede_principal,
                 ),
             )
@@ -566,6 +590,7 @@ class Repositorio:
             adicionais=adicionais,
             pagamentos=pagamentos,
             hospede_id=linha["hospede_id"],
+            origem=linha["origem"] if "origem" in linha.keys() else "balcao",
         )
         # O modelo atual pode ainda não declarar hospedes_ids; a API precisa
         # desse atributo para representar reservas com vários hóspedes.
@@ -703,8 +728,12 @@ class Repositorio:
         if categoria is not None:
             filtros.append("categoria = ?")
             parametros.append(str(categoria).strip().casefold())
-        sql = "SELECT * FROM pagamentos"
+        sql = """SELECT p.*, q.tipo AS tipo_quarto
+                 FROM pagamentos p
+                 JOIN reservas r ON r.id = p.reserva_id
+                 JOIN quartos q ON q.numero = r.quarto_numero"""
         if filtros:
+            filtros = [f.replace("data_pagamento", "p.data_pagamento").replace("categoria =", "p.categoria =") for f in filtros]
             sql += " WHERE " + " AND ".join(filtros)
         sql += " ORDER BY data_pagamento, id"
         with self._lock:
@@ -715,6 +744,7 @@ class Repositorio:
                     "valor": float(linha["valor"]),
                     "data": self._data(linha["data_pagamento"]),
                     "forma": linha["forma"], "categoria": linha["categoria"],
+                    "tipo_quarto": linha["tipo_quarto"],
                 }
                 for linha in linhas
             ]

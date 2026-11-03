@@ -49,10 +49,17 @@ class Pessoa: # Concentra os dados comuns (nome, documento, email, telefone, id)
 
     @documento.setter
     def documento(self, valor: str) -> None:
-        digitos = "".join(c for c in str(valor) if c.isdigit())
-        if len(digitos) not in (11, 14):  # CPF ou CNPJ
-            raise ValueError("Documento deve ter 11 (CPF) ou 14 (CNPJ) dígitos")
-        self.__documento = digitos
+        documento = str(valor).strip().upper()
+        digitos = "".join(c for c in documento if c.isdigit())
+        if len(digitos) == 11 and all(c.isdigit() or c in ".- /" for c in documento):
+            self.__documento = digitos
+            return
+        # Passaporte pode conter letras e números, conforme o país emissor.
+        alfanumerico = "".join(c for c in documento if c.isalnum())
+        if 6 <= len(alfanumerico) <= 20 and any(c.isalpha() for c in alfanumerico):
+            self.__documento = alfanumerico
+            return
+        raise ValueError("Documento deve ser um CPF válido em formato numérico ou passaporte alfanumérico")
 
     # =========== email ==============             
     @property

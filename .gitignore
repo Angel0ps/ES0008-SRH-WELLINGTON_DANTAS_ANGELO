@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Bancos SQLite locais e artefatos de execução
+*.db
+*.sqlite
+*.sqlite3

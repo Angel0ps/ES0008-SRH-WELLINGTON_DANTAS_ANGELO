@@ -1,12 +1,12 @@
-from datetime import date
+from datetime import date, datetime, time, timedelta
+
+from app.config import carregar_configuracoes
 
 from app.models.registros import Reserva, Pagamento, Adicional
 from app.services.tarifas import Tarifa
 
 # ============================================= constantes de negócio =============================================
-PRAZO_CANCELAMENTO_GRATUITO_DIAS = 2   # cancelar com >= 2 dias de antecedência: sem multa
-MULTA_CANCELAMENTO_DIARIAS = 1         # fora do prazo: multa de 1 diária
-MULTA_NO_SHOW_DIARIAS = 1              # não compareceu: multa de 1 diária
+MULTA_NO_SHOW_DIARIAS = 1  # no-show: multa de uma diária
 
 # status (em minúsculo) cujo quarto fica reservado/ocupado
 STATUS_OCUPAM_QUARTO = ("confirmada", "hospedado")
@@ -28,8 +28,9 @@ class ServicoReservas:
     diária simples do quarto.
     """
 
-    def __init__(self, repositorio, tarifa: Tarifa | None = None):
+    def __init__(self, repositorio, tarifa: Tarifa | None = None, configuracoes: dict | None = None):
         self.repositorio = repositorio
+        self.configuracoes = configuracoes or carregar_configuracoes()
         self.tarifa = tarifa
 
     # ==================== criação ====================
@@ -40,7 +41,9 @@ class ServicoReservas:
         data_entrada: date,
         data_saida: date,
         hospedes_ids: list,
-        qtd_hospedes: int
+        qtd_hospedes: int,
+        origem: str = "balcao",
+        status_inicial: str = "Pendente",
     ) -> Reserva:
         # Valida datas e consistência dos hóspedes antes de consultar/persistir.
         if not isinstance(data_entrada, date) or not isinstance(data_saida, date):
@@ -86,16 +89,20 @@ class ServicoReservas:
 
         self._garantir_sem_conflito(quarto.numero, data_entrada, data_saida)
 
+        if status_inicial not in {"Pendente", "Confirmada"}:
+            raise ValueError("Status inicial deve ser Pendente ou Confirmada")
+
         reserva = Reserva(
             id=id,
             quarto_relacionado=quarto.numero,
             data=date.today(),
             tipo="reserva",
-            status="Confirmada",
+            status=status_inicial,
             data_entrada=data_entrada,
             data_saida=data_saida,
             qtd_hospedes=qtd_hospedes,
             hospedes_ids=list(hospedes_ids),
+            origem=origem,
         )
         self.repositorio.salvar_reserva(reserva)
 
@@ -151,105 +158,179 @@ class ServicoReservas:
         return quarto.diaria
 
     # ==================== fluxos ====================
-    def check_in(self, reserva_id: str, hoje: date | None = None) -> Reserva:
-        hoje = hoje or date.today()
+    def confirmar(self, reserva_id: str) -> Reserva:
         reserva = self._obter_reserva(reserva_id)
+        if _norm(reserva.status) != "pendente":
+            raise ValueError("Somente reservas Pendentes podem ser confirmadas")
+        quarto = self.repositorio.obter_quarto(reserva.quarto_relacionado)
+        if quarto is None or _norm(quarto.status) in STATUS_QUARTO_BLOQUEANTE or _norm(quarto.status) == "ocupado":
+            raise ValueError("Quarto indisponível para confirmação da reserva")
+        self._garantir_sem_conflito(
+            reserva.quarto_relacionado, reserva.data_entrada, reserva.data_saida
+        )
+        reserva.confirmar()
+        self.repositorio.salvar_reserva(reserva)
+        return reserva
 
+    def check_in(self, reserva_id: str, hoje: date | datetime | None = None) -> Reserva:
+        reserva = self._obter_reserva(reserva_id)
         if _norm(reserva.status) != "confirmada":
             raise ValueError(
                 f"Check-in só é permitido em reserva Confirmada (atual: {reserva.status!r})"
             )
 
-        if hoje < reserva.data_entrada:
-            raise ValueError(
-                f"Check-in antecipado: a entrada só está prevista para {reserva.data_entrada}"
-            )
-
-        reserva.checkIn()  # status -> Hospedado
-        self.repositorio.salvar_reserva(reserva)
+        hora_config = time.fromisoformat(self.configuracoes["checkin"]["horario"])
+        tolerancia = int(self.configuracoes["checkin"]["tolerancia_antecipada_minutos"])
+        momento = hoje or datetime.now()
+        if isinstance(momento, date) and not isinstance(momento, datetime):
+            momento = datetime.combine(momento, hora_config)
+        elif momento.tzinfo is not None:
+            momento = momento.astimezone().replace(tzinfo=None)
+        if momento.date() != reserva.data_entrada:
+            raise ValueError("Check-in antecipado ou fora da data prevista para a entrada")
+        inicio_permitido = datetime.combine(reserva.data_entrada, hora_config) - timedelta(minutes=tolerancia)
+        if momento < inicio_permitido:
+            raise ValueError(f"Check-in permitido a partir de {inicio_permitido.time().strftime('%H:%M')}")
 
         quarto = self.repositorio.obter_quarto(reserva.quarto_relacionado)
-        if _norm(quarto.status) == "disponivel":
-            quarto.status = "ocupado"
-            self.repositorio.salvar_quarto(quarto)
+        if quarto is None or _norm(quarto.status) != "disponivel":
+            raise ValueError("Quarto deve estar DISPONIVEL para check-in")
+        for bloqueio in self.repositorio.listar_bloqueios(quarto_numero=quarto.numero):
+            if _norm(bloqueio.status) in ("ativo", "confirmado") and bloqueio.data <= momento.date() <= bloqueio.data_fim:
+                raise ValueError("Quarto está bloqueado para manutenção na data do check-in")
 
+        reserva.checkIn()
+        self.repositorio.salvar_reserva(reserva)
+        quarto.status = "ocupado"
+        self.repositorio.salvar_quarto(quarto)
         return reserva
 
-    def check_out(self, reserva_id: str) -> Reserva:
+    def check_out(self, reserva_id: str, momento: date | datetime | None = None) -> Reserva:
         reserva = self._obter_reserva(reserva_id)
-
         if _norm(reserva.status) != "hospedado":
             raise ValueError(
                 f"Check-out só é permitido em reserva Hospedado (atual: {reserva.status!r})"
             )
 
-        reserva.checkOut()  # status -> Finalizada
+        horario = time.fromisoformat(self.configuracoes["checkout"]["horario"])
+        tolerancia = int(self.configuracoes["checkout"]["tolerancia_atraso_minutos"])
+        instante = momento or datetime.now()
+        if isinstance(instante, date) and not isinstance(instante, datetime):
+            instante = datetime.combine(instante, horario)
+        elif instante.tzinfo is not None:
+            instante = instante.astimezone().replace(tzinfo=None)
+        if instante.date() < reserva.data_saida:
+            raise ValueError("Check-out não pode ocorrer antes da data prevista para a saída")
+        limite = datetime.combine(reserva.data_saida, horario) + timedelta(minutes=tolerancia)
+        diarias_extras = 0
+        if instante > limite:
+            diarias_extras = max(
+                1,
+                (instante.date() - reserva.data_saida).days
+                + (1 if instante.time() > horario else 0),
+            )
+        diaria_extra = sum(
+            self._diaria_do_quarto_na_data(
+                reserva, reserva.data_saida + timedelta(days=indice)
+            )
+            for indice in range(diarias_extras)
+        )
+
+        valor_hospedagem = self.calcular_valor_reserva(reserva)
+        total_devido = valor_hospedagem + reserva.total_adicionais() + diaria_extra
+        total_pago = reserva.total_pago()
+        if total_pago + 0.00001 < total_devido:
+            raise ValueError(
+                f"Pagamento insuficiente: total devido R$ {total_devido:.2f}; "
+                f"total pago R$ {total_pago:.2f}"
+            )
+
+        if diaria_extra:
+            reserva.adicionais.append(
+                Adicional(
+                    id=f"late-checkout-{reserva.id}",
+                    descricao=f"{diarias_extras} diária(s) extra(s) por check-out após o horário limite",
+                    valor=diaria_extra,
+                    data=reserva.data_saida,
+                )
+            )
+        reserva.checkOut()
         self.repositorio.salvar_reserva(reserva)
 
         quarto = self.repositorio.obter_quarto(reserva.quarto_relacionado)
-        quarto.status = "disponivel"
-        self.repositorio.salvar_quarto(quarto)
-
+        if quarto is not None and _norm(quarto.status) == "ocupado":
+            # A manutenção agendada permanece na tabela de bloqueios por período;
+            # não transformamos um bloqueio temporário em status global permanente.
+            quarto.status = "disponivel"
+            self.repositorio.salvar_quarto(quarto)
         return reserva
 
-    def cancelar(self, reserva_id: str, hoje: date | None = None) -> float:
-        """Cancela a reserva e retorna o valor da multa.
-
-        - faltando >= 2 dias para a entrada: multa zero;
-        - caso contrário: multa de 1 diária (com tarifa, se houver).
-        """
-        hoje = hoje or date.today()
+    def cancelar(self, reserva_id: str, hoje: date | datetime | None = None) -> float:
+        """Cancela reserva pendente/confirmada conforme a janela em horas."""
         reserva = self._obter_reserva(reserva_id)
-
-        if _norm(reserva.status) != "confirmada":
+        status_atual = _norm(reserva.status)
+        if status_atual not in {"pendente", "confirmada"}:
             raise ValueError(
-                f"Só é possível cancelar reserva Confirmada (atual: {reserva.status!r})"
+                f"Só é possível cancelar reserva Pendente ou Confirmada (atual: {reserva.status!r})"
             )
 
-        dias_para_entrada = (reserva.data_entrada - hoje).days
+        if hoje is None:
+            momento = datetime.now()
+        elif isinstance(hoje, datetime):
+            momento = hoje.astimezone().replace(tzinfo=None) if hoje.tzinfo else hoje
+        elif isinstance(hoje, date):
+            momento = datetime.combine(hoje, time.min)
+        else:
+            raise ValueError("Informe uma data ou data/hora válida para o cancelamento")
 
-        if dias_para_entrada >= PRAZO_CANCELAMENTO_GRATUITO_DIAS:
+        hora_checkin = time.fromisoformat(self.configuracoes["checkin"]["horario"])
+        entrada = datetime.combine(reserva.data_entrada, hora_checkin)
+        horas_antecedencia = (entrada - momento).total_seconds() / 3600
+        prazo_gratuito = int(self.configuracoes["cancelamento"]["prazo_gratuito_horas"])
+
+        if status_atual == "pendente" or horas_antecedencia >= prazo_gratuito:
             multa = 0.0
         else:
             diaria = self._diaria_do_quarto_na_data(reserva, reserva.data_entrada)
-            multa = diaria * MULTA_CANCELAMENTO_DIARIAS
+            percentual = float(self.configuracoes["cancelamento"]["multa_percentual"])
+            multa = diaria * percentual
 
-        reserva.cancelarReserva()  # status -> Cancelada
+        reserva.cancelarReserva()
         self.repositorio.salvar_reserva(reserva)
-        self.repositorio.salvar_penalidade(
-            reserva.id, "cancelamento", multa, hoje
-        )
-
+        self.repositorio.salvar_penalidade(reserva.id, "cancelamento", multa, momento.date())
         return multa
 
-    def no_show(self, reserva_id: str, hoje: date | None = None) -> float:
-        """Marca a reserva como No-show e retorna a multa (1 diária).
-
-        Só é possível se o dia da entrada já passou sem check-in.
-        """
-        hoje = hoje or date.today()
+    def no_show(self, reserva_id: str, hoje: date | datetime | None = None) -> float:
+        """Marca NO_SHOW após 23:59 da entrada mais a tolerância configurada."""
         reserva = self._obter_reserva(reserva_id)
-
         if _norm(reserva.status) != "confirmada":
             raise ValueError(
                 f"Só é possível marcar No-show em reserva Confirmada (atual: {reserva.status!r})"
             )
+        if hoje is None:
+            momento = datetime.now()
+        elif isinstance(hoje, datetime):
+            momento = hoje.astimezone().replace(tzinfo=None) if hoje.tzinfo else hoje
+        elif isinstance(hoje, date):
+            # Uma data isolada representa o fim daquele dia para compatibilidade
+            # com chamadas antigas; APIs podem enviar o instante exato.
+            momento = datetime.combine(hoje, time.max)
+        else:
+            raise ValueError("Informe uma data ou data/hora válida para o no-show")
 
-        if hoje <= reserva.data_entrada:
+        limite = datetime.combine(reserva.data_entrada, time(23, 59)) + timedelta(
+            minutes=int(self.configuracoes["no_show"]["tolerancia_minutos"])
+        )
+        if momento <= limite:
             raise ValueError(
-                f"No-show só pode ser marcado após o dia da entrada ({reserva.data_entrada})"
+                f"No-show só pode ser marcado após o dia da entrada e a tolerância: {limite.isoformat(sep=' ')}"
             )
 
         diaria = self._diaria_do_quarto_na_data(reserva, reserva.data_entrada)
         multa = diaria * MULTA_NO_SHOW_DIARIAS
-
-        reserva.status = "No-show"
-        reserva.rastrearEdicao("sistema", "No-show registrado.")
+        reserva.marcarNoShow("sistema")
         self.repositorio.salvar_reserva(reserva)
-        self.repositorio.salvar_penalidade(
-            reserva.id, "no_show", multa, hoje
-        )
-
+        self.repositorio.salvar_penalidade(reserva.id, "no_show", multa, momento.date())
         return multa
 
     # ==================== pagamentos e adicionais ====================

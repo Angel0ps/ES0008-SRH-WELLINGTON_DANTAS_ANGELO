@@ -174,3 +174,8 @@ def test_alterar_email_invalido_apos_criacao_levanta_erro():
         h.email = "invalido"
 
     assert h.email == "ana@email.com"
+
+
+def test_documento_passaporte_alfanumerico_e_aceito():
+    hospede = criar_hospede(documento="AB1234567")
+    assert hospede.documento == "AB1234567"

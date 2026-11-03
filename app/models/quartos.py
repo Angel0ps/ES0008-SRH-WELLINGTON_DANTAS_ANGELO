@@ -126,9 +126,15 @@ class Quarto(ABC):
         return f"Quarto {self.numero} ({self.status}) - R$ {self.diaria:.2f}/noite"
 
     def __lt__(self, outro: "Quarto"):
+        """Ordena primeiro por categoria e depois pela numeração do quarto."""
         if not isinstance(outro, Quarto):
             return NotImplemented
-        return self.diaria < outro.diaria
+        ordem = {"Simples": 0, "Duplo": 1, "Luxo": 2}
+        def chave(quarto):
+            numero = str(quarto.numero)
+            numero_ordenavel = (0, int(numero)) if numero.isdigit() else (1, numero.casefold())
+            return (ordem.get(type(quarto).__name__, 99), numero_ordenavel)
+        return chave(self) < chave(outro)
 
     def __repr__(self) -> str:
         return (

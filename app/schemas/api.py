@@ -1,6 +1,6 @@
 """Schemas Pydantic usados na validação da API FastAPI."""
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -23,9 +23,9 @@ class QuartoEntrada(SchemaBase):
 class HospedeEntrada(SchemaBase):
     id: str = Field(min_length=1)
     nome: str = Field(min_length=1)
-    documento: str = ""
-    email: str = ""
-    telefone: str = ""
+    documento: str = Field(min_length=6)
+    email: str = Field(min_length=5)
+    telefone: str = Field(min_length=10)
     observacoes: str = ""
     acessibilidade: bool = False
 
@@ -34,8 +34,8 @@ class FuncionarioEntrada(SchemaBase):
     id: str = Field(min_length=1)
     nome: str = Field(min_length=1)
     documento: str = Field(min_length=1)
-    email: str = ""
-    telefone: str = ""
+    email: str = Field(min_length=5)
+    telefone: str = Field(min_length=10)
     cargo: str = Field(min_length=1)
 
 
@@ -46,6 +46,7 @@ class ReservaEntrada(SchemaBase):
     saida: date
     hospedes_ids: list[str] = Field(min_length=1)
     qtd_hospedes: int = Field(gt=0)
+    origem: Literal["site", "telefone", "balcao"] = "balcao"
 
     @model_validator(mode="after")
     def validar_periodo_e_hospedes(self):
@@ -60,6 +61,8 @@ class ReservaEntrada(SchemaBase):
 
 class DataOpcional(SchemaBase):
     hoje: date | None = None
+    momento: datetime | None = None
+
 
 
 class PagamentoEntrada(SchemaBase):

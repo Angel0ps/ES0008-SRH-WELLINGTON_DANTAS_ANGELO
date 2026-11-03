@@ -1,0 +1,40 @@
+{
+  "checkin": {
+    "horario": "14:00",
+    "tolerancia_antecipada_minutos": 30
+  },
+  "checkout": {
+    "horario": "12:00",
+    "tolerancia_atraso_minutos": 0
+  },
+  "no_show": {
+    "tolerancia_minutos": 60
+  },
+  "cancelamento": {
+    "prazo_gratuito_horas": 48,
+    "multa_percentual": 1.0
+  },
+  "tarifas": {
+    "multiplicador_fim_semana": 1.3,
+    "temporadas": [
+      {
+        "nome": "Temporada de julho",
+        "inicio": "2026-07-01",
+        "fim": "2026-07-31",
+        "multiplicador": 1.5
+      },
+      {
+        "nome": "Temporada de outubro",
+        "inicio": "2026-10-01",
+        "fim": "2026-10-31",
+        "multiplicador": 1.0
+      },
+      {
+        "nome": "Alta temporada",
+        "inicio": "2026-12-01",
+        "fim": "2027-02-28",
+        "multiplicador": 1.5
+      }
+    ]
+  }
+}

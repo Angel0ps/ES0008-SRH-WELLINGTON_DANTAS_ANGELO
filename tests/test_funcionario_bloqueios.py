@@ -126,3 +126,53 @@ def test_migracao_de_pagamentos_e_bloqueios_legados(tmp_path):
         assert "funcionarios" in tabelas
     finally:
         repo.fechar()
+
+
+def test_seed_cria_sete_quartos_sem_duplicar(tmp_path):
+    from app.database.seed import executar_seed
+    caminho = str(tmp_path / "seed.db")
+    assert executar_seed(caminho) == 7
+    assert executar_seed(caminho) == 0
+    repo = Repositorio(caminho)
+    try:
+        assert len(repo.listar_quartos()) == 7
+    finally:
+        repo.fechar()
+
+
+def test_migracao_reserva_legada_adiciona_origem_padrao(tmp_path):
+    import sqlite3
+    caminho = tmp_path / "reservas_legado.db"
+    conexao = sqlite3.connect(caminho)
+    conexao.executescript("""
+        CREATE TABLE quartos (
+            numero TEXT PRIMARY KEY, capacidade INTEGER NOT NULL,
+            diaria REAL NOT NULL, status TEXT NOT NULL
+        );
+        CREATE TABLE hospedes (
+            id TEXT PRIMARY KEY, nome TEXT NOT NULL
+        );
+        CREATE TABLE reservas (
+            id TEXT PRIMARY KEY, quarto_numero TEXT NOT NULL,
+            data_reserva TEXT NOT NULL, data_entrada TEXT NOT NULL,
+            data_saida TEXT NOT NULL, qtd_hospedes INTEGER NOT NULL,
+            status TEXT NOT NULL, tipo TEXT NOT NULL, hospede_id TEXT
+        );
+        INSERT INTO quartos VALUES ('101', 2, 100, 'disponivel');
+        INSERT INTO hospedes VALUES ('h1', 'Ana');
+        INSERT INTO reservas VALUES (
+            'r1', '101', '2026-10-01', '2026-12-10', '2026-12-12',
+            1, 'Confirmada', 'reserva', 'h1'
+        );
+    """)
+    conexao.commit()
+    conexao.close()
+    repo = Repositorio(caminho)
+    try:
+        reserva = repo.obter_reserva("r1")
+        assert reserva.origem == "balcao"
+        assert "origem" in {
+            c["name"] for c in repo.conn.execute("PRAGMA table_info(reservas)")
+        }
+    finally:
+        repo.fechar()

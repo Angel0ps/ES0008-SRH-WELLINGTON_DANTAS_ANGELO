@@ -6,9 +6,7 @@ como hospedagem, filtrados pela data de recebimento. As noites vendidas são
 obtidas das reservas que ocuparam o quarto no período.
 """
 
-from datetime import date
-
-from app.services.tarifas import Tarifa
+from datetime import date, timedelta
 
 
 STATUS_CONTAM_OCUPACAO = ("confirmada", "hospedado", "finalizada")
@@ -38,6 +36,30 @@ class RelatorioOcupacao:
         fim_reserva = min(reserva.data_saida, fim)
         return max(0, (fim_reserva - ini).days)
 
+    def noites_disponiveis_por_quarto(self, inicio: date, fim: date) -> dict:
+        """Conta noites vendáveis, descontando manutenção/bloqueios ativos."""
+        _validar_periodo(inicio, fim)
+        resultado = {}
+        bloqueios = self.repositorio.listar_bloqueios()
+        for quarto in self.repositorio.listar_quartos():
+            if _normalizar_status(quarto.status) in {"manutencao", "bloqueado"}:
+                resultado[quarto.numero] = 0
+                continue
+            noites = 0
+            dia = inicio
+            while dia < fim:
+                indisponivel = any(
+                    b.quarto_relacionado == quarto.numero
+                    and _normalizar_status(b.status) in {"ativo", "confirmado"}
+                    and b.data <= dia <= b.data_fim
+                    for b in bloqueios
+                )
+                if not indisponivel:
+                    noites += 1
+                dia += timedelta(days=1)
+            resultado[quarto.numero] = noites
+        return resultado
+
     def ocupacao_por_quarto(self, inicio: date, fim: date) -> dict:
         _validar_periodo(inicio, fim)
         resultado = {q.numero: 0 for q in self.repositorio.listar_quartos()}
@@ -56,17 +78,21 @@ class RelatorioOcupacao:
         if not quartos:
             return 0.0
         noites = sum(self.ocupacao_por_quarto(inicio, fim).values())
-        capacidade = len(quartos) * (fim - inicio).days
-        return noites / capacidade if capacidade else 0.0
+        capacidade = sum(self.noites_disponiveis_por_quarto(inicio, fim).values())
+        return (noites / capacidade * 100) if capacidade else 0.0
 
     def gerar(self, inicio: date, fim: date) -> dict:
         por_quarto = self.ocupacao_por_quarto(inicio, fim)
+        noites_ocupadas = sum(por_quarto.values())
+        noites_disponiveis = sum(self.noites_disponiveis_por_quarto(inicio, fim).values())
+        taxa = (noites_ocupadas / noites_disponiveis * 100) if noites_disponiveis else 0.0
         return {
             "inicio": inicio.isoformat(),
             "fim": fim.isoformat(),
-            "noites_ocupadas": sum(por_quarto.values()),
-            "noites_disponiveis": len(por_quarto) * (fim - inicio).days,
-            "taxa_ocupacao": self.taxa_ocupacao(inicio, fim),
+            "noites_ocupadas": noites_ocupadas,
+            "noites_disponiveis": noites_disponiveis,
+            "taxa_ocupacao": round(taxa, 2),
+            "taxa_ocupacao_fracao": round(taxa / 100, 4),
             "noites_por_quarto": por_quarto,
         }
 
@@ -104,7 +130,13 @@ class RelatorioReceita:
             inicio, fim, categoria="hospedagem"
         )
         receita = sum(pagamento["valor"] for pagamento in pagamentos)
-        noites_disponiveis = len(quartos) * (fim - inicio).days
+        disponibilidade = RelatorioOcupacao(self.repositorio).noites_disponiveis_por_quarto(inicio, fim)
+        noites_disponiveis = sum(disponibilidade.values())
+        receita_por_tipo = {}
+        for pagamento in pagamentos:
+            tipo = pagamento.get("tipo_quarto", "Não informado")
+            receita_por_tipo[tipo] = receita_por_tipo.get(tipo, 0.0) + pagamento["valor"]
+        receita_por_tipo = {tipo: round(valor, 2) for tipo, valor in sorted(receita_por_tipo.items())}
         adr = receita / noites_vendidas if noites_vendidas else 0.0
         revpar = receita / noites_disponiveis if noites_disponiveis else 0.0
         return {
@@ -117,6 +149,7 @@ class RelatorioReceita:
             "noites_disponiveis": noites_disponiveis,
             "adr": round(adr, 2),
             "revpar": round(revpar, 2),
+            "receita_por_tipo_quarto": receita_por_tipo,
         }
 
     def adr(self, inicio: date, fim: date) -> float:

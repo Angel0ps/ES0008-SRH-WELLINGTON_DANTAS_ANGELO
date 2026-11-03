@@ -128,6 +128,7 @@ class Registro:  # Concentra os dados comuns a todos os registros. Como id, orig
 
 class Reserva(Registro, Rastreabilidade):
     # A classe central do sistema herda os atributos de Registro e Rastreabilidade.
+    STATUS_VALIDOS = ("Pendente", "Confirmada", "Hospedado", "Finalizada", "Cancelada", "No-show")
 
     def __init__(
         self,
@@ -143,6 +144,7 @@ class Reserva(Registro, Rastreabilidade):
         pagamentos: list | None = None,
         hospede_id: str | None = None,
         hospedes_ids: list | None = None,
+        origem: str = "balcao",
     ):
         super().__init__(
             id,
@@ -164,6 +166,18 @@ class Reserva(Registro, Rastreabilidade):
         )
         self.adicionais = adicionais if adicionais is not None else []
         self.pagamentos = pagamentos if pagamentos is not None else []
+        self.origem = origem
+
+    @property
+    def origem(self) -> str:
+        return self.__origem
+
+    @origem.setter
+    def origem(self, valor: str) -> None:
+        origem = str(valor or "").strip().casefold()
+        if origem not in {"site", "telefone", "balcao"}:
+            raise ValueError("Origem deve ser site, telefone ou balcao")
+        self.__origem = origem
 
     # ========== data entrada ==========
 
@@ -322,6 +336,8 @@ class Reserva(Registro, Rastreabilidade):
     # ========== métodos da reserva ==========
 
     def confirmar(self, responsavel: str = "sistema"):
+        if self.status != "Pendente":
+            raise ValueError("Somente reservas Pendentes podem ser confirmadas")
         self.status = "Confirmada"
 
         self.rastrearEdicao(
@@ -332,6 +348,8 @@ class Reserva(Registro, Rastreabilidade):
         return f"Reserva {self.id} confirmada."
 
     def cancelarReserva(self, responsavel: str = "sistema") -> str:
+        if self.status not in ("Pendente", "Confirmada"):
+            raise ValueError("Somente reservas Pendentes ou Confirmadas podem ser canceladas")
         self.status = "Cancelada"
 
         self.rastrearEdicao(
@@ -342,6 +360,8 @@ class Reserva(Registro, Rastreabilidade):
         return f"Reserva {self.id} cancelada."
 
     def checkIn(self, responsavel: str = "sistema"):
+        if self.status != "Confirmada":
+            raise ValueError("Check-in exige uma reserva Confirmada")
         self.status = "Hospedado"
 
         self.rastrearEdicao(
@@ -352,6 +372,8 @@ class Reserva(Registro, Rastreabilidade):
         return f"Check-in da reserva {self.id} realizado."
 
     def checkOut(self, responsavel: str = "sistema"):
+        if self.status != "Hospedado":
+            raise ValueError("Check-out exige uma reserva com check-in realizado")
         self.status = "Finalizada"
 
         self.rastrearEdicao(
@@ -360,6 +382,13 @@ class Reserva(Registro, Rastreabilidade):
         )
 
         return f"Check-out da reserva {self.id} realizado."
+
+    def marcarNoShow(self, responsavel: str = "sistema"):
+        if self.status != "Confirmada":
+            raise ValueError("No-show exige uma reserva Confirmada")
+        self.status = "No-show"
+        self.rastrearEdicao(responsavel, "No-show registrado.")
+        return f"No-show da reserva {self.id} registrado."
 
     def total_pago(self) -> float:
         return sum(
@@ -382,6 +411,18 @@ class Reserva(Registro, Rastreabilidade):
 
     def __len__(self):
         return (self.data_saida - self.data_entrada).days
+
+    def __eq__(self, outro: object) -> bool:
+        if not isinstance(outro, Reserva):
+            return NotImplemented
+        return (
+            self.quarto_relacionado == outro.quarto_relacionado
+            and self.data_entrada == outro.data_entrada
+            and self.data_saida == outro.data_saida
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.quarto_relacionado, self.data_entrada, self.data_saida))
 
 
 # ============================================================== composições e subclasses =================================================================
@@ -490,7 +531,7 @@ class Pagamento(Rastreabilidade):
         formas_validas = {
             "pix", "cartao", "cartao_credito", "cartao_debito",
             "credito", "debito", "dinheiro", "transferencia", "ted", "doc",
-            "cartão", "cartão de crédito", "cartão de débito",
+            "cartao de credito", "cartao de debito", "cartão", "cartão de crédito", "cartão de débito",
         }
 
         if normalizado not in formas_validas:

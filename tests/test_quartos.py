@@ -45,22 +45,23 @@ def test_str_quarto():
     assert "200.00" in str(q)
 
 
-def test_lt_quarto_compara_por_diaria():
-    barato = Simples(numero="101", capacidade=2, diaria=100)
-    caro = Simples(numero="102", capacidade=2, diaria=300)
+def test_lt_quarto_compara_por_categoria_e_numero():
+    simples = Simples(numero="102", capacidade=2, diaria=300)
+    duplo = Duplo(numero="101", capacidade=2, diaria=100)
 
-    assert barato < caro
-    assert not (caro < barato)
+    assert simples < duplo
+    assert not (duplo < simples)
 
 
 def test_sorted_lista_de_quartos():
-    q1 = Simples(numero="A", capacidade=2, diaria=300)
-    q2 = Simples(numero="B", capacidade=2, diaria=100)
-    q3 = Simples(numero="C", capacidade=2, diaria=200)
+    luxo = Luxo(numero="301", capacidade=4, diaria=200)
+    duplo = Duplo(numero="201", capacidade=2, diaria=300)
+    simples2 = Simples(numero="102", capacidade=1, diaria=400)
+    simples1 = Simples(numero="101", capacidade=1, diaria=500)
 
-    ordenados = sorted([q1, q2, q3])
+    ordenados = sorted([luxo, simples2, duplo, simples1])
 
-    assert [q.numero for q in ordenados] == ["B", "C", "A"]
+    assert [q.numero for q in ordenados] == ["101", "102", "201", "301"]
 
 
 def test_subclasses_herdam_validacao():
@@ -225,3 +226,13 @@ def test_migracao_adiciona_diferencial_em_banco_legado(tmp_path):
         assert repo.obter_quarto("101").diferencial == ""
     finally:
         repo.fechar()
+
+
+def test_ordem_de_quartos_prioriza_categoria_e_numero():
+    quartos = [
+        Luxo("301", 4, 400),
+        Simples("102", 1, 100),
+        Duplo("201", 2, 200),
+        Simples("101", 1, 110),
+    ]
+    assert [q.numero for q in sorted(quartos)] == ["101", "102", "201", "301"]

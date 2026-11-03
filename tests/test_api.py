@@ -30,10 +30,14 @@ def cadastrar_base(client):
 
 
 def criar_reserva(client, reserva_id="r1", entrada="2026-12-10", saida="2026-12-12"):
-    return client.post("/reservas", json={
+    resposta = client.post("/reservas", json={
         "id": reserva_id, "quarto": "101", "entrada": entrada,
         "saida": saida, "hospedes_ids": ["h1"], "qtd_hospedes": 1,
+        "origem": "site",
     })
+    if resposta.status_code == 201:
+        client.post(f"/reservas/{reserva_id}/confirmar")
+    return resposta
 
 
 def test_fastapi_disponibiliza_openapi_e_health(client):
@@ -59,11 +63,19 @@ def test_post_hospede(client):
     assert resposta.json()["nome"] == "Ana Souza"
 
 
-def test_criar_reserva(client):
+def test_criar_reserva_inicia_pendente_e_pode_ser_confirmada(client):
     cadastrar_base(client)
-    resposta = criar_reserva(client)
+    resposta = client.post("/reservas", json={
+        "id": "r1", "quarto": "101", "entrada": "2026-12-10",
+        "saida": "2026-12-12", "hospedes_ids": ["h1"],
+        "qtd_hospedes": 1, "origem": "site",
+    })
     assert resposta.status_code == 201
-    assert resposta.json()["status"] == "Confirmada"
+    assert resposta.json()["status"] == "Pendente"
+    assert resposta.json()["origem"] == "site"
+    confirmacao = client.post("/reservas/r1/confirmar")
+    assert confirmacao.status_code == 200
+    assert confirmacao.json()["status"] == "Confirmada"
     assert resposta.json()["noites"] == 2
 
 
@@ -82,7 +94,12 @@ def test_checkin_checkout_cancelamento_e_no_show(client):
     assert resposta.status_code == 200
     assert resposta.json()["status"] == "Hospedado"
     assert client.get("/quartos").json()[0]["status"] == "ocupado"
-    resposta = client.post("/reservas/r1/checkout")
+    client.post("/reservas/r1/pagamentos", json={
+        "id": "p-checkout", "forma": "pix", "valor": 345.0,
+        "data": "2026-12-12", "categoria": "hospedagem",
+    })
+    resposta = client.post("/reservas/r1/checkout", json={"momento": "2026-12-12T12:00:00"})
+    assert resposta.status_code == 200
     assert resposta.json()["status"] == "Finalizada"
     assert client.get("/quartos").json()[0]["status"] == "disponivel"
 
@@ -150,3 +167,113 @@ def test_reserva_inexistente_retorna_404(client):
 def test_validacao_pydantic_retorna_422(client):
     resposta = client.post("/quartos", json={"numero": "101", "capacidade": 0, "diaria": -1})
     assert resposta.status_code == 422
+
+
+def test_crud_quartos_hospedes_e_historico(client):
+    cadastrar_base(client)
+    assert client.get("/quartos/101").status_code == 200
+    atualizacao_quarto = client.put("/quartos/101", json={
+        "numero": "101", "tipo": "Duplo", "capacidade": 3,
+        "diaria": 180, "status": "disponivel",
+    })
+    assert atualizacao_quarto.status_code == 200
+    assert atualizacao_quarto.json()["tipo"] == "Duplo"
+
+    assert client.get("/hospedes/h1").status_code == 200
+    atualizacao_hospede = client.put("/hospedes/h1", json={
+        "id": "h1", "nome": "Ana Souza Atualizada",
+        "documento": "12345678901", "email": "ana@mail.com",
+        "telefone": "88999998888",
+    })
+    assert atualizacao_hospede.status_code == 200
+    assert atualizacao_hospede.json()["nome"] == "Ana Souza Atualizada"
+
+    assert criar_reserva(client).status_code == 201
+    historico = client.get("/hospedes/h1/reservas")
+    assert historico.status_code == 200
+    assert historico.json()[0]["id"] == "r1"
+
+
+def test_api_expoe_configuracoes_e_relatorio_por_tipo(client):
+    config = client.get("/configuracoes")
+    assert config.status_code == 200
+    assert len(config.json()["tarifas"]["temporadas"]) == 3
+    assert client.get(
+        "/relatorios/receita-por-tipo?inicio=2026-12-01&fim=2027-01-01"
+    ).status_code == 200
+
+
+def test_api_crud_remove_recursos_sem_vinculos(client):
+    cadastrar_base(client)
+    assert client.delete("/quartos/101").status_code == 204
+    assert client.get("/quartos/101").status_code == 404
+    assert client.delete("/hospedes/h1").status_code == 204
+    assert client.get("/hospedes/h1").status_code == 404
+
+
+def test_api_impede_remover_quarto_vinculado_a_reserva(client):
+    cadastrar_base(client)
+    assert criar_reserva(client).status_code == 201
+    resposta = client.delete("/quartos/101")
+    assert resposta.status_code == 409
+
+
+def test_bloqueio_nao_pode_ser_criado_sobre_reserva_confirmada(client):
+    cadastrar_base(client)
+    assert criar_reserva(client).status_code == 201
+    resposta = client.post("/bloqueios", json={
+        "id": "b-conflict", "quarto": "101",
+        "data_inicio": "2026-12-11", "data_fim": "2026-12-13",
+        "motivo": "Manutenção emergencial",
+    })
+    assert resposta.status_code == 409
+
+
+def test_reserva_pendente_nao_ocupa_ate_confirmacao(client):
+    cadastrar_base(client)
+    payload = {
+        "quarto": "101", "entrada": "2026-12-10", "saida": "2026-12-12",
+        "hospedes_ids": ["h1"], "qtd_hospedes": 1,
+    }
+    primeira = client.post("/reservas", json={**payload, "id": "r-pendente-1"})
+    segunda = client.post("/reservas", json={**payload, "id": "r-pendente-2"})
+    assert primeira.status_code == segunda.status_code == 201
+    assert client.post("/reservas/r-pendente-1/confirmar").status_code == 200
+    conflito = client.post("/reservas/r-pendente-2/confirmar")
+    assert conflito.status_code == 422
+
+
+def test_reserva_rejeita_origem_invalida(client):
+    cadastrar_base(client)
+    resposta = client.post("/reservas", json={
+        "id": "r-invalida", "quarto": "101", "entrada": "2026-12-10",
+        "saida": "2026-12-12", "hospedes_ids": ["h1"],
+        "qtd_hospedes": 1, "origem": "aplicativo",
+    })
+    assert resposta.status_code == 422
+
+
+def test_no_show_api_respeita_tolerancia_em_minutos(client):
+    cadastrar_base(client)
+    assert criar_reserva(client).status_code == 201
+    cedo = client.post("/reservas/r1/noshow", json={
+        "momento": "2026-12-11T00:30:00",
+    })
+    assert cedo.status_code == 422
+    valido = client.post("/reservas/r1/noshow", json={
+        "momento": "2026-12-11T01:00:00",
+    })
+    assert valido.status_code == 200
+
+
+def test_api_calcula_valor_previsto_da_reserva(client):
+    cadastrar_base(client)
+    criada = client.post("/reservas", json={
+        "id": "r-valor", "quarto": "101", "entrada": "2026-12-10",
+        "saida": "2026-12-12", "hospedes_ids": ["h1"], "qtd_hospedes": 1,
+    })
+    assert criada.status_code == 201
+    assert criada.json()["valor_hospedagem"] == 345.0
+    valor = client.get("/reservas/r-valor/valor")
+    assert valor.status_code == 200
+    assert valor.json()["saldo_devedor"] == 345.0
