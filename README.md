@@ -482,21 +482,3 @@ flowchart TD
     E --> F[(srh_wda.db)]
     D --> G[Modelos POO]
 ```
-
-## 12. Escopo e observações
-
-Esta versão é uma API acadêmica mínima, sem autenticação, autorização, integração com gateway de pagamento ou concorrência distribuída. O SQLite e o bloqueio em memória da conexão atendem ao uso local e aos testes; uma implantação com múltiplos processos/instâncias exigiria rever a estratégia de concorrência e conexão. Os horários são interpretados no fuso local do servidor, sem gestão de fusos por hotel.
-
-## 13. Publicação da versão v1.0 no GitHub
-
-A criação da tag precisa ser feita no repositório GitHub do autor, com as credenciais e permissões dele. Após enviar os arquivos finais e confirmar os testes:
-
-```bash
-git add .
-git commit -m "Finaliza SRH-WDA v1.0"
-git push origin main
-git tag -a v1.0 -m "Entrega final do Sistema de Reservas de Hotel"
-git push origin v1.0
-```
-
-Se a branch principal do repositório tiver outro nome, substitua `main` pelo nome correto. Depois, envie o link `https://github.com/USUARIO/REPOSITORIO/releases/tag/v1.0` ao Classroom, substituindo pelos dados do repositório.
