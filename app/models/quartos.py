@@ -167,4 +167,11 @@ class Duplo(Quarto):
 
 
 class Luxo(Quarto):
-    pass
+    def requisitarQuarto(self) -> str:
+        return super().requisitarQuarto()
+
+    def diferenciarLuxo(self) -> str:
+        return self.diferencial or "Quarto da categoria luxo."
+
+    def observacoesLuxo(self) -> str:
+        return self.observacoes or "Sem observações adicionais para o quarto luxo."
