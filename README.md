@@ -135,7 +135,7 @@ O diretório informado deve existir. As tabelas/colunas ausentes são criadas po
 
 ### Carga inicial (seed)
 
-O seed insere sete quartos (três Simples, três Duplos e um Luxo) e pode ser executado mais de uma vez sem duplicar quartos:
+O seed garante a existência dos sete quartos iniciais (três Simples, três Duplos e um Luxo), inserindo somente os que ainda não existem. Pode ser executado mais de uma vez sem duplicar quartos:
 
 ```bash
 python -m app.database.seed
@@ -183,10 +183,12 @@ Os exemplos abaixo assumem a API iniciada localmente.
 
 ### Cadastrar quarto e hóspede
 
+O banco de dados distribuído com o projeto já contém os quartos `101`, `102` e `103`. Por isso, use o número `401` neste exemplo para demonstrar o cadastro de um novo quarto sem gerar conflito de numeração:
+
 ```bash
 curl -X POST http://127.0.0.1:8000/quartos \
   -H 'Content-Type: application/json' \
-  -d '{"numero":"101","tipo":"Simples","capacidade":2,"diaria":100,"status":"disponivel"}'
+  -d '{"numero":"401","tipo":"Simples","capacidade":2,"diaria":100,"status":"disponivel"}'
 
 curl -X POST http://127.0.0.1:8000/hospedes \
   -H 'Content-Type: application/json' \
@@ -194,6 +196,8 @@ curl -X POST http://127.0.0.1:8000/hospedes \
 ```
 
 ### Criar e confirmar reserva
+
+Este exemplo utiliza o quarto `101`, que já existe no banco de dados inicial. O quarto `401` do exemplo anterior é apenas uma demonstração de cadastro e não é utilizado nesta reserva.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/reservas \
@@ -398,3 +402,21 @@ flowchart TD
     E --> F[(srh_wda.db)]
     D --> G[Modelos POO]
 ```
+
+## 12. Escopo e observações
+
+Esta versão é uma API acadêmica mínima, sem autenticação, autorização, integração com gateway de pagamento ou concorrência distribuída. O SQLite e o bloqueio em memória da conexão atendem ao uso local e aos testes; uma implantação com múltiplos processos/instâncias exigiria rever a estratégia de concorrência e conexão. Os horários são interpretados no fuso local do servidor, sem gestão de fusos por hotel.
+
+## 13. Publicação da versão v1.0 no GitHub
+
+A criação da tag precisa ser feita no repositório GitHub do autor, com as credenciais e permissões dele. Após enviar os arquivos finais e confirmar os testes:
+
+```bash
+git add .
+git commit -m "Finaliza SRH-WDA v1.0"
+git push origin main
+git tag -a v1.0 -m "Entrega final do Sistema de Reservas de Hotel"
+git push origin v1.0
+```
+
+Se a branch principal do repositório tiver outro nome, substitua `main` pelo nome correto. Depois, envie o link `https://github.com/USUARIO/REPOSITORIO/releases/tag/v1.0` ao Classroom, substituindo pelos dados do repositório.
